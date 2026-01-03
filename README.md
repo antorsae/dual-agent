@@ -30,7 +30,7 @@ brew install tmux jq
 ## Installation
 
 ```bash
-git clone https://github.com/yourusername/dual-agent.git
+git clone https://github.com/antorsae/dual-agent.git
 cd dual-agent
 ./setup-dual-agent.sh
 ```
@@ -285,27 +285,23 @@ to Codex for a thorough security review before we proceed.
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      tmux session                           │
-├─────────────────────────┬───────────────────────────────────┤
-│                         │                                   │
-│   Claude Code           │   Codex CLI                       │
-│   (Primary Agent)       │   (Secondary Agent)               │
-│                         │                                   │
-│   • Orchestrates        │   • Deep analysis                 │
-│   • Plans               │   • Security review               │
-│   • Quick iterations    │   • Complex implementations       │
-│   • Delegates tasks     │   • Thorough edge case analysis   │
-│                         │                                   │
-└────────────┬────────────┴──────────────┬────────────────────┘
-             │                           │
-             │    .agent-collab/         │
-             │  ┌─────────────────────┐  │
-             └─►│ status              │◄─┘
-                │ requests/task.md    │
-                │ responses/response.md
-                │ context/shared.md   │
-                └─────────────────────┘
+┌───────────────────┬───────────────────┐
+│    Claude Code    │     Codex CLI     │
+│  (Primary Agent)  │ (Secondary Agent) │
+├───────────────────┼───────────────────┤
+│ • Orchestrates    │ • Deep analysis   │
+│ • Plans           │ • Security review │
+│ • Quick tasks     │ • Complex impl    │
+│ • Delegates       │ • Edge cases      │
+└─────────┬─────────┴─────────┬─────────┘
+          │                   │
+          │  .agent-collab/   │
+          │ ┌───────────────┐ │
+          └►│ status        │◄┘
+            │ requests/     │
+            │ responses/    │
+            │ context/      │
+            └───────────────┘
 ```
 
 ### Communication Protocol
