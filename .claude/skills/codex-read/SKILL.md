@@ -9,9 +9,32 @@ Read the response from Codex and integrate findings.
 
 ## Steps
 
+Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
+
+```bash
+AGENT_COLLAB_DIR="${AGENT_COLLAB_DIR:-}"
+if [ -n "$AGENT_COLLAB_DIR" ]; then
+  if [ -d "$AGENT_COLLAB_DIR/.agent-collab" ]; then
+    AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+  elif [ ! -d "$AGENT_COLLAB_DIR" ]; then
+    AGENT_COLLAB_DIR=""
+  fi
+fi
+
+if [ -z "$AGENT_COLLAB_DIR" ]; then
+  AGENT_COLLAB_DIR="$(pwd)"
+  while [ "$AGENT_COLLAB_DIR" != "/" ] && [ ! -d "$AGENT_COLLAB_DIR/.agent-collab" ]; do
+    AGENT_COLLAB_DIR="$(dirname "$AGENT_COLLAB_DIR")"
+  done
+  AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+fi
+```
+
+If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
+
 ### 1. Check Status
 
-Read `.agent-collab/status`:
+Read `$AGENT_COLLAB_DIR/status`:
 - `idle`: No pending task. Inform user.
 - `pending`: Codex hasn't started. Check Codex pane.
 - `working`: Codex still processing. Wait.
@@ -19,7 +42,7 @@ Read `.agent-collab/status`:
 
 ### 2. Read Response
 
-Read `.agent-collab/responses/response.md` and parse:
+Read `$AGENT_COLLAB_DIR/responses/response.md` and parse:
 - Task type completed
 - Findings/output
 - Any code produced
@@ -54,7 +77,7 @@ For implementations:
 
 ### 5. Reset Status
 
-Write `idle` to `.agent-collab/status`
+Write `idle` to `$AGENT_COLLAB_DIR/status`
 
 ### 6. Next Steps
 

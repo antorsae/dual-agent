@@ -15,6 +15,29 @@ Send code to the Codex agent (running in tmux pane 1) for deep code review.
 
 ## Steps
 
+Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
+
+```bash
+AGENT_COLLAB_DIR="${AGENT_COLLAB_DIR:-}"
+if [ -n "$AGENT_COLLAB_DIR" ]; then
+  if [ -d "$AGENT_COLLAB_DIR/.agent-collab" ]; then
+    AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+  elif [ ! -d "$AGENT_COLLAB_DIR" ]; then
+    AGENT_COLLAB_DIR=""
+  fi
+fi
+
+if [ -z "$AGENT_COLLAB_DIR" ]; then
+  AGENT_COLLAB_DIR="$(pwd)"
+  while [ "$AGENT_COLLAB_DIR" != "/" ] && [ ! -d "$AGENT_COLLAB_DIR/.agent-collab" ]; do
+    AGENT_COLLAB_DIR="$(dirname "$AGENT_COLLAB_DIR")"
+  done
+  AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+fi
+```
+
+If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
+
 ### 1. Gather Code to Review
 
 Ask user what to review if not specified:
@@ -24,7 +47,7 @@ Ask user what to review if not specified:
 
 ### 2. Write Task Request
 
-Write to `.agent-collab/requests/task.md`:
+Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 
 ```markdown
 # Task Request for Codex
@@ -52,7 +75,7 @@ Write to `.agent-collab/requests/task.md`:
 
 ### 3. Update Status
 
-Write `pending` to `.agent-collab/status`
+Write `pending` to `$AGENT_COLLAB_DIR/status`
 
 ### 4. Trigger Codex
 
@@ -68,19 +91,19 @@ Tell user briefly that the review was delegated to Codex.
 
 ### 6. Wait for Codex (Background Polling)
 
-Start a background polling loop to wait for Codex to complete. Run this bash command using the Bash tool with `run_in_background: true`:
+Start a background polling loop to wait for Codex to complete. Run this EXACT bash command (with `$AGENT_COLLAB_DIR/status`) using the Bash tool with `run_in_background: true`:
 
 ```bash
-while [ "$(cat .agent-collab/status)" != "done" ]; do sleep 3; done; echo "CODEX_COMPLETE"
+while [ "$(cat "$AGENT_COLLAB_DIR/status")" != "done" ]; do sleep 3; done; echo "CODEX_COMPLETE"
 ```
 
-IMPORTANT: Use background execution so you can continue helping the user while waiting.
+CRITICAL: Use the resolved `$AGENT_COLLAB_DIR/status` path so polling works outside the project root. Use background execution so you can continue helping the user while waiting.
 
 ### 7. Auto-Read Response
 
 When the background poll completes (returns "CODEX_COMPLETE"), automatically:
-1. Read `.agent-collab/responses/response.md`
+1. Read `$AGENT_COLLAB_DIR/responses/response.md`
 2. Present findings to user with clear formatting
-3. Reset `.agent-collab/status` to `idle`
+3. Reset `$AGENT_COLLAB_DIR/status` to `idle`
 
 This should happen seamlessly - user sees the delegation message, then later sees the results appear automatically.

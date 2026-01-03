@@ -15,6 +15,15 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+if [ ! -d "$PROJECT_DIR" ]; then
+    echo -e "${RED}Error: project directory not found: $PROJECT_DIR${NC}"
+    exit 1
+fi
+
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+AGENT_COLLAB_DIR="$PROJECT_DIR/.agent-collab"
+AGENT_COLLAB_DIR_ESCAPED=$(printf %q "$AGENT_COLLAB_DIR")
+
 echo -e "${GREEN}Starting Dual Agent Development Environment${NC}"
 echo -e "Session: ${YELLOW}$SESSION_NAME${NC}"
 echo -e "Project: ${YELLOW}$PROJECT_DIR${NC}"
@@ -32,6 +41,41 @@ check_command tmux
 check_command claude
 check_command codex
 
+check_tmux_version() {
+    local version major minor
+    version=$(tmux -V | awk '{print $2}')
+    major=$(echo "$version" | awk -F. '{print $1}')
+    minor=$(echo "$version" | awk -F. '{print $2}' | sed -E 's/[^0-9].*//')
+
+    if [ -z "$major" ] || [ -z "$minor" ]; then
+        echo -e "${RED}Error: Unable to parse tmux version: $version${NC}"
+        return 1
+    fi
+
+    if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 6 ]; }; then
+        echo -e "${RED}Error: tmux 2.6+ required (found $version)${NC}"
+        return 1
+    fi
+}
+
+check_tmux_version
+
+if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+    echo -e "${RED}Error: tmux session '$SESSION_NAME' already exists.${NC}"
+    echo -e "Use a different name or attach with: tmux attach -t $SESSION_NAME"
+    exit 1
+fi
+
+session_lock="$PROJECT_DIR/.agent-collab/session"
+if [ -f "$session_lock" ]; then
+    locked_session=$(cat "$session_lock")
+    if [ -n "$locked_session" ] && tmux has-session -t "$locked_session" 2>/dev/null; then
+        echo -e "${RED}Error: project already has an active session: $locked_session${NC}"
+        echo -e "Detach or stop that session before starting another for this project."
+        exit 1
+    fi
+fi
+
 # Initialize .agent-collab if it doesn't exist
 if [ ! -d "$PROJECT_DIR/.agent-collab" ]; then
     echo -e "${YELLOW}Initializing .agent-collab directory...${NC}"
@@ -42,11 +86,10 @@ if [ ! -d "$PROJECT_DIR/.agent-collab" ]; then
     echo "# No responses yet" > "$PROJECT_DIR/.agent-collab/responses/response.md"
 fi
 
-# Kill existing session if it exists
-tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
-
 # Create new tmux session
 tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR"
+
+echo "$SESSION_NAME" > "$session_lock"
 
 # Rename the first window
 tmux rename-window -t "$SESSION_NAME:0" "agents"
@@ -63,12 +106,14 @@ tmux select-pane -t "$SESSION_NAME:0.0" -T "Claude (Primary)"
 tmux select-pane -t "$SESSION_NAME:0.1" -T "Codex (Secondary)"
 
 # Start Claude in left pane
+tmux send-keys -t "$SESSION_NAME:0.0" "export AGENT_COLLAB_DIR=$AGENT_COLLAB_DIR_ESCAPED" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "echo -e '${GREEN}=== CLAUDE CODE (Primary Agent) ===${NC}'" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "echo 'Skills: /codex-review, /codex-implement, /codex-plan-review, /codex-read, /codex-status'" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "echo ''" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "claude" Enter
 
 # Start Codex in right pane with max settings
+tmux send-keys -t "$SESSION_NAME:0.1" "export AGENT_COLLAB_DIR=$AGENT_COLLAB_DIR_ESCAPED" Enter
 tmux send-keys -t "$SESSION_NAME:0.1" "echo -e '${YELLOW}=== CODEX (Secondary Agent) ===${NC}'" Enter
 tmux send-keys -t "$SESSION_NAME:0.1" "echo 'Skills: /read-task, /respond, /claude-status'" Enter
 tmux send-keys -t "$SESSION_NAME:0.1" "echo ''" Enter

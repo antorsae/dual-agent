@@ -9,19 +9,42 @@ Read and execute a task delegated from Claude Code.
 
 ## Steps
 
+Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
+
+```bash
+AGENT_COLLAB_DIR="${AGENT_COLLAB_DIR:-}"
+if [ -n "$AGENT_COLLAB_DIR" ]; then
+  if [ -d "$AGENT_COLLAB_DIR/.agent-collab" ]; then
+    AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+  elif [ ! -d "$AGENT_COLLAB_DIR" ]; then
+    AGENT_COLLAB_DIR=""
+  fi
+fi
+
+if [ -z "$AGENT_COLLAB_DIR" ]; then
+  AGENT_COLLAB_DIR="$(pwd)"
+  while [ "$AGENT_COLLAB_DIR" != "/" ] && [ ! -d "$AGENT_COLLAB_DIR/.agent-collab" ]; do
+    AGENT_COLLAB_DIR="$(dirname "$AGENT_COLLAB_DIR")"
+  done
+  AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+fi
+```
+
+If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
+
 ### 1. Update Status
 
-Write `working` to `.agent-collab/status`
+Write `working` to `$AGENT_COLLAB_DIR/status`
 
 ### 2. Read the Task
 
-Read `.agent-collab/requests/task.md` and parse:
+Read `$AGENT_COLLAB_DIR/requests/task.md` and parse:
 - Task Type: CODE_REVIEW, IMPLEMENT, or PLAN_REVIEW
 - All requirements and context
 
 ### 3. Read Shared Context
 
-Also read `.agent-collab/context/shared.md` for project context.
+Also read `$AGENT_COLLAB_DIR/context/shared.md` for project context.
 
 ### 4. Execute Based on Task Type
 
@@ -61,7 +84,7 @@ Critically analyze the plan:
 
 ### 5. Write Response
 
-Write complete response to `.agent-collab/responses/response.md`:
+Write complete response to `$AGENT_COLLAB_DIR/responses/response.md`:
 
 ```markdown
 # Codex Response
@@ -114,7 +137,7 @@ Write complete response to `.agent-collab/responses/response.md`:
 
 ### 6. Update Status
 
-Write `done` to `.agent-collab/status`
+Write `done` to `$AGENT_COLLAB_DIR/status`
 
 ### 7. Notify
 

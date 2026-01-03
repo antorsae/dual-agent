@@ -33,11 +33,34 @@ check_install() {
     fi
 }
 
+check_tmux_version() {
+    local version major minor
+    version=$(tmux -V | awk '{print $2}')
+    major=$(echo "$version" | awk -F. '{print $1}')
+    minor=$(echo "$version" | awk -F. '{print $2}' | sed -E 's/[^0-9].*//')
+
+    if [ -z "$major" ] || [ -z "$minor" ]; then
+        echo -e "  ${RED}[MISSING]${NC} tmux 2.6+ required (unable to parse version: $version)"
+        return 1
+    fi
+
+    if [ "$major" -lt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -lt 6 ]; }; then
+        echo -e "  ${RED}[MISSING]${NC} tmux 2.6+ required (found $version)"
+        return 1
+    fi
+
+    echo -e "  ${GREEN}[OK]${NC} tmux version $version"
+}
+
 MISSING=0
 check_install tmux "Install with: brew install tmux" || MISSING=1
 check_install claude "Install from: https://github.com/anthropics/claude-code" || MISSING=1
 check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 check_install jq "Install with: brew install jq" || MISSING=1
+
+if command -v tmux &> /dev/null; then
+    check_tmux_version || MISSING=1
+fi
 
 if [ $MISSING -eq 1 ]; then
     echo ""
@@ -98,7 +121,7 @@ DUAL_AGENT_PERMISSIONS='[
   "Bash(echo pending > .agent-collab/status)",
   "Bash(echo working > .agent-collab/status)",
   "Bash(echo done > .agent-collab/status)",
-  "Bash(while [ \"$(cat .agent-collab/status)\":*)",
+  "Bash(while [ \"$(cat .agent-collab/status)\" != \"done\" ]; do sleep:*)",
   "Bash(tmux send-keys:*)"
 ]'
 

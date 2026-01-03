@@ -15,6 +15,29 @@ Manually write response back to Claude.
 
 ## Steps
 
+Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
+
+```bash
+AGENT_COLLAB_DIR="${AGENT_COLLAB_DIR:-}"
+if [ -n "$AGENT_COLLAB_DIR" ]; then
+  if [ -d "$AGENT_COLLAB_DIR/.agent-collab" ]; then
+    AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+  elif [ ! -d "$AGENT_COLLAB_DIR" ]; then
+    AGENT_COLLAB_DIR=""
+  fi
+fi
+
+if [ -z "$AGENT_COLLAB_DIR" ]; then
+  AGENT_COLLAB_DIR="$(pwd)"
+  while [ "$AGENT_COLLAB_DIR" != "/" ] && [ ! -d "$AGENT_COLLAB_DIR/.agent-collab" ]; do
+    AGENT_COLLAB_DIR="$(dirname "$AGENT_COLLAB_DIR")"
+  done
+  AGENT_COLLAB_DIR="$AGENT_COLLAB_DIR/.agent-collab"
+fi
+```
+
+If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
+
 ### 1. Gather Response
 
 If task not yet completed, finish it now.
@@ -23,7 +46,7 @@ Collect all findings, code, or analysis.
 
 ### 2. Write Response
 
-Write to `.agent-collab/responses/response.md`:
+Write to `$AGENT_COLLAB_DIR/responses/response.md`:
 
 ```markdown
 # Codex Response
@@ -43,7 +66,7 @@ Write to `.agent-collab/responses/response.md`:
 
 ### 3. Update Status
 
-Write `done` to `.agent-collab/status`
+Write `done` to `$AGENT_COLLAB_DIR/status`
 
 ### 4. Confirm
 
