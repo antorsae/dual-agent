@@ -93,11 +93,13 @@ CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
 # Permissions needed for dual-agent collaboration
 DUAL_AGENT_PERMISSIONS='[
-  "cat .agent-collab/*",
-  "cat .agent-collab/**",
-  "echo * > .agent-collab/status",
-  "while *; do sleep *; done; echo *",
-  "tmux send-keys *"
+  "Bash(cat .agent-collab:*)",
+  "Bash(echo idle > .agent-collab/status)",
+  "Bash(echo pending > .agent-collab/status)",
+  "Bash(echo working > .agent-collab/status)",
+  "Bash(echo done > .agent-collab/status)",
+  "Bash(while [ \"$(cat .agent-collab/status)\":*)",
+  "Bash(tmux send-keys:*)"
 ]'
 
 if [ -f "$CLAUDE_SETTINGS" ]; then
