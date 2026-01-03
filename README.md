@@ -159,7 +159,7 @@ Response ready. Claude can retrieve it with /codex-read.
 
 Claude automatically retrieves and presents the review:
 
-```
+````text
 Claude: Codex completed the review. Here are the findings:
 
 ## Critical Issues
@@ -205,7 +205,7 @@ Claude: Codex completed the review. Here are the findings:
 3. Consider sliding window for smoother limiting
 
 Shall I apply these fixes?
-```
+````
 
 ### Step 5: Claude Applies Fixes
 
@@ -224,60 +224,6 @@ Done. The rate limiter now:
 ✓ Has connection resilience with exponential backoff
 
 Would you like me to send the updated code for another review pass?
-```
-
----
-
-## Suggested Complex Problem
-
-### Building a JWT Authentication System with Refresh Token Rotation
-
-This is an ideal problem for Claude + Codex collaboration:
-
-**Why it's complex:**
-- Security-critical (authentication bypass = full compromise)
-- Cryptographic operations (timing attacks, key management)
-- Stateful token management (refresh token rotation, revocation)
-- Race conditions (concurrent refresh requests)
-- Edge cases (clock skew, token reuse detection)
-
-**Collaboration workflow:**
-
-1. **Claude** designs the architecture:
-   - Access token (short-lived, stateless)
-   - Refresh token (long-lived, stored in Redis)
-   - Rotation strategy (new refresh token on each use)
-
-2. **Codex** reviews for security vulnerabilities:
-   - Timing-safe token comparison
-   - Proper HMAC validation
-   - Refresh token reuse detection (token family tracking)
-   - Secure token storage (httpOnly, secure, sameSite cookies)
-
-3. **Claude** implements the token family tracking
-
-4. **Codex** reviews the concurrent refresh handling:
-   - What if two requests use the same refresh token simultaneously?
-   - Is the revocation atomic?
-   - Are there any race conditions in the rotation?
-
-5. **Claude** fixes issues and implements Redis Lua scripts for atomicity
-
-6. **Codex** does final security audit
-
-**Example prompt to start:**
-
-```
-I need to implement a JWT authentication system with:
-- Short-lived access tokens (15 min)
-- Refresh tokens with rotation (7 days)
-- Refresh token family tracking for reuse detection
-- Automatic revocation of entire family on reuse detection
-- Redis-backed token storage
-- Protection against concurrent refresh race conditions
-
-This is security-critical. After implementation, please delegate
-to Codex for a thorough security review before we proceed.
 ```
 
 ---
