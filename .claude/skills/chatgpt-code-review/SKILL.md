@@ -39,31 +39,85 @@ Send the COMPLETE, VERBATIM source code. Do NOT:
 
 If the file is too large to read at once, read it in chunks and concatenate ALL chunks into the prompt.
 
-### Rule 3: NEWLINE HANDLING
+### Rule 3: BUILD JAVASCRIPT USING THIS ALGORITHM
 
-When building prompts, you MUST use `String.fromCharCode(10)` for ALL newlines.
+After reading file content, use this algorithm to build the JavaScript:
 
-**NEVER use `\n` in strings.** The literal characters `\n` will NOT create newlines.
+```python
+# ALGORITHM: Transform file content into JavaScript code string
+def build_javascript_for_chatgpt(file_content: str, context: str) -> str:
+    """
+    Transforms file content into injectable JavaScript.
 
-```javascript
-// ❌ WRONG - Creates a SINGLE LINE:
-var text = 'Line 1\nLine 2\nLine 3';
+    Args:
+        file_content: The complete source code read from file
+        context: Brief description of what to analyze
 
-// ✅ CORRECT - Use String.fromCharCode(10):
-var nl = String.fromCharCode(10);
-var text = 'Line 1' + nl + 'Line 2' + nl + 'Line 3';
+    Returns:
+        JavaScript code to execute in browser console
+    """
+    # Step 1: Split content into lines
+    lines = file_content.split('\n')
 
-// ✅ ALSO CORRECT - Array with join:
-var nl = String.fromCharCode(10);
-var text = ['Line 1', 'Line 2', 'Line 3'].join(nl);
+    # Step 2: Escape each line for JavaScript string
+    escaped_lines = []
+    for line in lines:
+        # Escape backslashes first, then single quotes
+        escaped = line.replace('\\', '\\\\').replace("'", "\\'")
+        escaped_lines.append(escaped)
+
+    # Step 3: Build the code variable with + nl + joins
+    # Format: 'line1' + nl + 'line2' + nl + 'line3'
+    code_parts = ["'" + line + "'" for line in escaped_lines]
+    code_js = " + nl +\n".join(code_parts)
+
+    # Step 4: Build complete JavaScript
+    javascript = f"""var nl = String.fromCharCode(10);
+var bt = String.fromCharCode(96);
+var el = document.querySelector('#prompt-textarea');
+var code = {code_js};
+var text = [
+'{context}',
+'',
+'Complete source code:',
+bt+bt+bt,
+code,
+bt+bt+bt
+].join(nl);
+el.innerText = text;
+el.dispatchEvent(new Event('input', {{bubbles: true}}));"""
+
+    return javascript
 ```
 
-**Before submitting JavaScript, verify:**
-- [ ] Sending exactly ONE message (not multiple)
-- [ ] Code is COMPLETE and VERBATIM (not summarized)
-- [ ] `var nl = String.fromCharCode(10);` is declared at the top
-- [ ] Every newline uses `+ nl +` concatenation or `.join(nl)`
-- [ ] NO literal `\n` appears anywhere in the JavaScript code
+**USE THIS ALGORITHM.** Do not manually construct the JavaScript.
+
+---
+
+## VERIFICATION STEP (DO NOT SKIP)
+
+**Before executing ANY JavaScript, you MUST:**
+
+1. **Print the first 5 lines of your JavaScript** to the user for verification
+2. **Confirm these checks pass:**
+   - Line 1 is: `var nl = String.fromCharCode(10);`
+   - NO `\n` appears anywhere (search your code for backslash-n)
+   - NO `\\n` appears anywhere
+   - Code variable contains the FULL source (not excerpts)
+
+**Example of CORRECT first lines:**
+```javascript
+var nl = String.fromCharCode(10);
+var bt = String.fromCharCode(96);
+var el = document.querySelector('#prompt-textarea');
+var code = '/* Line 1 of actual code */' + nl +
+'/* Line 2 of actual code */' + nl +
+```
+
+**If you see this pattern, STOP - it's WRONG:**
+```javascript
+var code = 'line1\nline2\nline3';  // WRONG - \n is literal
+```
 
 ---
 
