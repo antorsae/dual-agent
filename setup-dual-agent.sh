@@ -57,6 +57,7 @@ check_install tmux "Install with: brew install tmux" || MISSING=1
 check_install claude "Install from: https://github.com/anthropics/claude-code" || MISSING=1
 check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 check_install jq "Install with: brew install jq" || MISSING=1
+check_install node "Install from: https://nodejs.org" || MISSING=1
 
 if command -v tmux &> /dev/null; then
     check_tmux_version || MISSING=1
@@ -66,6 +67,24 @@ if [ $MISSING -eq 1 ]; then
     echo ""
     echo -e "${RED}Please install missing dependencies and run again.${NC}"
     exit 1
+fi
+
+echo ""
+
+# Build the codex-delegate agent
+echo -e "${YELLOW}Building codex-delegate agent...${NC}"
+AGENT_DIR="$SCRIPT_DIR/agent"
+
+if [ -d "$AGENT_DIR" ]; then
+    cd "$AGENT_DIR"
+    if [ ! -d "node_modules" ]; then
+        npm install --silent 2>/dev/null
+    fi
+    npm run build --silent 2>/dev/null
+    echo -e "  ${GREEN}[OK]${NC} Built codex-delegate MCP server"
+    cd "$SCRIPT_DIR"
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} agent/ directory not found"
 fi
 
 echo ""
@@ -110,8 +129,8 @@ fi
 
 echo ""
 
-# Merge Claude Code permissions for dual-agent commands
-echo -e "${YELLOW}Configuring Claude Code permissions...${NC}"
+# Configure Claude Code settings
+echo -e "${YELLOW}Configuring Claude Code settings...${NC}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
 # Permissions needed for dual-agent collaboration
@@ -125,36 +144,60 @@ DUAL_AGENT_PERMISSIONS='[
   "Bash(tmux send-keys:*)"
 ]'
 
+# MCP server configuration for codex-delegate
+MCP_SERVER_PATH="$AGENT_DIR/dist/mcp.js"
+MCP_CONFIG="{\"command\": \"node\", \"args\": [\"$MCP_SERVER_PATH\"]}"
+
 if [ -f "$CLAUDE_SETTINGS" ]; then
-    # File exists - merge permissions
+    # File exists - merge settings
     EXISTING=$(cat "$CLAUDE_SETTINGS")
 
-    # Check if permissions.allow exists
+    # Merge permissions
     if echo "$EXISTING" | jq -e '.permissions.allow' > /dev/null 2>&1; then
-        # Merge with existing allow list, avoiding duplicates
         MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
             .permissions.allow = (.permissions.allow + $new | unique)
         ')
     else
-        # Add permissions.allow to existing config
         MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
             .permissions.allow = $new
         ')
     fi
 
+    # Add MCP server if agent was built
+    if [ -f "$MCP_SERVER_PATH" ]; then
+        MERGED=$(echo "$MERGED" | jq --argjson mcp "$MCP_CONFIG" '
+            .mcpServers["codex-delegate"] = $mcp
+        ')
+        echo -e "  ${GREEN}[OK]${NC} Added codex-delegate MCP server"
+    fi
+
     echo "$MERGED" > "$CLAUDE_SETTINGS"
-    echo -e "  ${GREEN}[OK]${NC} Merged permissions into existing settings"
+    echo -e "  ${GREEN}[OK]${NC} Merged settings into existing config"
 else
     # Create new settings file
     mkdir -p "$HOME/.claude"
-    cat > "$CLAUDE_SETTINGS" << EOF
+    if [ -f "$MCP_SERVER_PATH" ]; then
+        cat > "$CLAUDE_SETTINGS" << EOF
+{
+  "permissions": {
+    "allow": $DUAL_AGENT_PERMISSIONS
+  },
+  "mcpServers": {
+    "codex-delegate": $MCP_CONFIG
+  }
+}
+EOF
+        echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions and MCP server"
+    else
+        cat > "$CLAUDE_SETTINGS" << EOF
 {
   "permissions": {
     "allow": $DUAL_AGENT_PERMISSIONS
   }
 }
 EOF
-    echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
+        echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
+    fi
 fi
 
 echo ""
@@ -220,21 +263,27 @@ echo -e "${GREEN}=======================================${NC}"
 echo -e "${GREEN}  Setup Complete!${NC}"
 echo -e "${GREEN}=======================================${NC}"
 echo ""
-echo -e "To start the dual agent environment:"
-echo -e "  ${YELLOW}./start-dual-agent.sh${NC}"
+echo -e "${BLUE}Three ways to use external models with Claude:${NC}"
 echo ""
-echo -e "Or with custom session name and directory:"
-echo -e "  ${YELLOW}./start-dual-agent.sh my-session /path/to/project${NC}"
+echo -e "${YELLOW}Option 1: MCP Tools (Recommended)${NC}"
+echo -e "  Claude now has codex tools available directly."
+echo -e "  Just ask: ${GREEN}\"review src/auth.ts using codex\"${NC}"
+echo -e "  Or: ${GREEN}\"have codex implement a rate limiter\"${NC}"
 echo ""
-echo -e "${BLUE}Workflow:${NC}"
-echo -e "  1. Work with Claude (left pane) as your primary agent"
-echo -e "  2. Delegate to Codex using: ${GREEN}/codex-review${NC}, ${GREEN}/codex-implement${NC}, ${GREEN}/codex-plan-review${NC}"
-echo -e "  3. Codex auto-receives tasks via tmux (semi-automated)"
-echo -e "  4. Read Codex results with: ${GREEN}/codex-read${NC}"
+echo -e "${YELLOW}Option 2: Tmux Dual-Pane${NC}"
+echo -e "  Run: ${GREEN}./start-dual-agent.sh${NC}"
+echo -e "  Use skills: ${GREEN}/codex-review${NC}, ${GREEN}/codex-implement${NC}, ${GREEN}/codex-plan-review${NC}"
 echo ""
-echo -e "${BLUE}Pro Tips:${NC}"
-echo -e "  - Edit ${YELLOW}.agent-collab/context/shared.md${NC} to provide project context to both agents"
-echo -e "  - Use ${GREEN}/codex-status${NC} to check collaboration status"
-echo -e "  - Codex excels at: deep code review, complex implementations, plan validation"
-echo -e "  - Claude excels at: rapid iteration, planning, quick tasks, orchestration"
+echo -e "${YELLOW}Option 3: ChatGPT Code Review (Chrome)${NC}"
+echo -e "  Run: ${GREEN}claude --chrome${NC}"
+echo -e "  Use skill: ${GREEN}/chatgpt-code-review${NC}"
+echo -e "  Requires: ChatGPT Pro subscription, Claude in Chrome extension"
+echo ""
+echo -e "${BLUE}Available Codex MCP Tools:${NC}"
+echo -e "  ${GREEN}delegate_codex_review${NC}      - Code review (security, bugs, quality)"
+echo -e "  ${GREEN}delegate_codex_implement${NC}   - Implement features"
+echo -e "  ${GREEN}delegate_codex_plan_review${NC} - Review implementation plans"
+echo -e "  ${GREEN}delegate_codex${NC}             - Custom prompts"
+echo ""
+echo -e "${BLUE}Note:${NC} Restart Claude Code to load the new MCP tools."
 echo ""

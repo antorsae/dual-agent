@@ -1,17 +1,17 @@
 # Dual Agent Development Environment
 
-A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI) in a split tmux session, enabling you to leverage the strengths of both AI models.
+A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI) and **ChatGPT Pro** (GPT-5.2 Pro), enabling you to leverage the strengths of multiple AI models.
 
-## Why Two Agents?
+## Why Multiple Agents?
 
-| Claude Code (Primary) | Codex CLI (Secondary) |
-|-----------------------|----------------------|
-| Fast iteration & prototyping | Deep, thorough code review |
-| Planning & orchestration | Complex algorithm implementation |
-| Quick fixes & refactoring | Security vulnerability analysis |
-| Context switching & multitasking | Meticulous edge case handling |
+| Claude Code (Primary) | Codex CLI | ChatGPT Pro (GPT-5.2) |
+|-----------------------|-----------|----------------------|
+| Fast iteration & prototyping | Deep, thorough code review | Extended thinking for complex analysis |
+| Planning & orchestration | Complex algorithm implementation | 200k context for large codebases |
+| Quick fixes & refactoring | Security vulnerability analysis | Second opinion on architecture |
+| Context switching & multitasking | Meticulous edge case handling | Long-running deep reviews (5-30 min) |
 
-By combining both, you get rapid development velocity with rigorous quality checks.
+By combining multiple models, you get rapid development velocity with rigorous quality checks and diverse perspectives.
 
 ## Prerequisites
 
@@ -19,10 +19,11 @@ By combining both, you get rapid development velocity with rigorous quality chec
 - [Claude Code](https://github.com/anthropics/claude-code) - Anthropic's CLI
 - [Codex CLI](https://github.com/openai/codex) - OpenAI's CLI
 - [jq](https://stedolan.github.io/jq/) - JSON processor
+- [Node.js](https://nodejs.org) - For the MCP server
 
 ```bash
 # macOS
-brew install tmux jq
+brew install tmux jq node
 
 # Claude Code & Codex CLI - follow their respective installation guides
 ```
@@ -36,194 +37,166 @@ cd dual-agent
 ```
 
 This will:
+- Build the codex-delegate MCP server
 - Install Claude skills to `~/.claude/skills/`
 - Install Codex skills to `~/.codex/skills/`
-- Configure Claude Code permissions for seamless collaboration
-- Initialize the `.agent-collab/` directory for inter-agent communication
-
-## Usage
-
-```bash
-# Start the dual-agent environment
-./start-dual-agent.sh
-
-# Or with custom session name and project directory
-./start-dual-agent.sh my-session /path/to/project
-```
-
-### Tmux Key Bindings
-
-| Keys | Action |
-|------|--------|
-| `Ctrl-b ←/→` | Switch between Claude and Codex panes |
-| `Ctrl-b d` | Detach from session |
-| `Ctrl-b z` | Zoom current pane (fullscreen toggle) |
-
-### Claude Skills (Left Pane)
-
-| Skill | Purpose |
-|-------|---------|
-| `/codex-review` | Send code to Codex for deep review |
-| `/codex-implement` | Delegate complex implementation to Codex |
-| `/codex-plan-review` | Get Codex's critique on your plan |
-| `/codex-read` | Read Codex's response |
-| `/codex-status` | Check collaboration status |
-
-### Codex Skills (Right Pane)
-
-| Skill | Purpose |
-|-------|---------|
-| `/read-task` | Pick up task from Claude |
-| `/respond` | Manually send response to Claude |
-| `/claude-status` | Check collaboration status |
+- Configure Claude Code with MCP server and permissions
+- Initialize the `.agent-collab/` directory
 
 ---
 
-## Detailed Execution Example
+## Three Ways to Use
 
-### Scenario: Implementing a Rate Limiter with Security Review
+### Option 1: MCP Tools (Recommended)
 
-You need to implement a production-grade distributed rate limiter. This is a perfect use case for dual-agent collaboration because:
+After running setup, Claude Code has Codex tools available directly. Just ask naturally:
 
-1. **Claude** can quickly scaffold the implementation and orchestrate the workflow
-2. **Codex** can perform deep security analysis and catch edge cases
+```
+You: Review src/auth.ts for security vulnerabilities using codex
 
-### Step 1: Start the Environment
+You: Have codex implement a rate limiter for the API
+
+You: Ask codex to review my migration plan
+```
+
+**Available MCP Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `delegate_codex_review` | Code review (security, bugs, performance) |
+| `delegate_codex_implement` | Implement features with Codex |
+| `delegate_codex_plan_review` | Review implementation plans |
+| `delegate_codex` | Send any custom prompt to Codex |
+
+### Option 2: Tmux Dual-Pane
+
+For interactive side-by-side work with both agents visible:
 
 ```bash
-cd your-project
 ./start-dual-agent.sh
 ```
 
-You now see two panes: Claude (left) and Codex (right).
+This opens a split tmux session with Claude (left) and Codex (right).
 
-### Step 2: Describe the Task to Claude
+**Skills:**
 
-In the Claude pane:
+| Claude Skills | Codex Skills |
+|---------------|--------------|
+| `/codex-review` | `/read-task` |
+| `/codex-implement` | `/respond` |
+| `/codex-plan-review` | `/claude-status` |
+| `/codex-read` | |
+| `/codex-status` | |
 
-```
-You: I need to implement a token bucket rate limiter that:
-- Supports distributed systems (Redis-backed)
-- Has per-user and global limits
-- Handles clock skew gracefully
-- Is resistant to race conditions
-```
+### Option 3: ChatGPT Code Review (Chrome)
 
-Claude responds and starts planning:
+Use GPT-5.2 Pro via Claude Code's Chrome integration for deep, extended-thinking code reviews:
 
-```
-Claude: I'll help you implement a distributed rate limiter. Let me create a plan:
-
-1. Design the token bucket algorithm with Redis
-2. Implement atomic operations to prevent race conditions
-3. Add per-user and global limit tiers
-4. Handle clock synchronization issues
-
-Let me start with the implementation...
-
-[Claude writes rate_limiter.py]
-
-I've implemented the rate limiter. Since this is security-critical code
-handling distributed state, I'm delegating to Codex for a thorough review.
-
-Delegating to Codex for deep code review...
-Task sent. I'll present the findings when ready.
+```bash
+# Start Claude Code with Chrome integration
+claude --chrome
 ```
 
-### Step 3: Automatic Codex Review
-
-Behind the scenes:
-1. Claude writes the task to `.agent-collab/requests/task.md`
-2. Claude triggers Codex via tmux
-3. Codex picks up the task with `/read-task`
-4. Codex performs deep analysis
-
-In the Codex pane, you see:
+Then ask naturally:
 
 ```
-Codex: Reading task from Claude...
+You: Review src/auth.ts with ChatGPT
 
-Task Type: CODE_REVIEW
-Analyzing rate_limiter.py for:
-- Race conditions in distributed operations
-- Security vulnerabilities
-- Edge cases and failure modes
-
-[Codex performs thorough line-by-line analysis]
-
-Writing response...
-Response ready. Claude can retrieve it with /codex-read.
+You: Get GPT-5.2 Pro to review this migration plan
 ```
 
-### Step 4: Claude Presents Findings
+**Prerequisites:**
+- Claude Code with `--chrome` flag
+- Claude in Chrome extension (v1.0.36+)
+- Logged into chat.com with ChatGPT Pro subscription
 
-Claude automatically retrieves and presents the review:
+**Workflow:**
+1. Claude submits the code review request to GPT-5.2 Pro
+2. Returns immediately (non-blocking) - GPT-5.2 can take 5-30 minutes
+3. Ask Claude to "fetch ChatGPT results" when ready
 
-````text
-Claude: Codex completed the review. Here are the findings:
+**Skill:** `/chatgpt-code-review`
+
+---
+
+## Quick Start
+
+### MCP Tools (Simplest)
+
+```bash
+# 1. Run setup
+./setup-dual-agent.sh
+
+# 2. Restart Claude Code to load MCP tools
+claude
+
+# 3. Use naturally
+> Review src/auth.ts for security issues using codex
+```
+
+### Tmux Dual-Pane
+
+```bash
+# 1. Run setup
+./setup-dual-agent.sh
+
+# 2. Start dual-agent environment
+./start-dual-agent.sh
+
+# 3. In Claude pane, use skills
+> /codex-review
+```
+
+---
+
+## Detailed Example: Security Review
+
+### Using MCP Tools
+
+```
+You: I just implemented authentication. Review src/auth.ts using codex
+     for security vulnerabilities.
+
+Claude: I'll use the delegate_codex_review tool to have Codex analyze this file...
+
+[Claude calls delegate_codex_review tool]
+
+Claude: Codex found the following issues:
 
 ## Critical Issues
 
-1. **Race Condition in Token Refill** (Line 45-52)
-   The current implementation has a TOCTOU vulnerability:
+1. **SQL Injection (Line 45)**
+   The query uses string concatenation instead of parameterized queries.
+
+   Fix:
    ```python
-   # Current (vulnerable)
-   tokens = redis.get(key)
-   if tokens < max_tokens:
-       redis.set(key, tokens + refill_rate)
+   cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
    ```
 
-   **Fix:** Use Redis WATCH/MULTI/EXEC or Lua scripting:
-   ```python
-   lua_script = """
-   local tokens = tonumber(redis.call('GET', KEYS[1]) or 0)
-   local max = tonumber(ARGV[1])
-   local refill = tonumber(ARGV[2])
-   if tokens < max then
-       tokens = math.min(tokens + refill, max)
-       redis.call('SET', KEYS[1], tokens)
-   end
-   return tokens
-   """
-   ```
+2. **Weak Password Hashing (Line 78)**
+   Using MD5 instead of bcrypt/argon2.
 
-2. **Clock Skew Not Handled** (Line 78)
-   Using `time.time()` without NTP consideration can cause
-   token leakage across nodes.
+...
+```
 
-   **Fix:** Use Redis TIME command for consistent timestamps.
-
-## Security Concerns
-
-1. Key enumeration possible if user IDs are sequential
-2. No protection against Redis connection exhaustion
-
-## Recommendations
-
-1. Implement exponential backoff for Redis reconnection
-2. Add metrics/alerting for rate limit violations
-3. Consider sliding window for smoother limiting
-
-Shall I apply these fixes?
-````
-
-### Step 5: Claude Applies Fixes
+### Using Tmux Dual-Pane
 
 ```
-You: Yes, apply all the fixes
+[Claude Pane]
+You: Review src/auth.ts for security issues
 
-Claude: Applying Codex's recommendations...
+Claude: I'll delegate this to Codex for a thorough security review.
+        Delegating to Codex...
 
-[Claude edits rate_limiter.py with the Lua script approach]
-[Claude adds Redis TIME-based timestamps]
-[Claude implements connection pooling with backoff]
+[Codex Pane - automatically receives task]
+Codex: Reading task from Claude...
+       Analyzing src/auth.ts for security vulnerabilities...
+       [Deep analysis]
+       Response ready.
 
-Done. The rate limiter now:
-✓ Uses atomic Lua operations (no race conditions)
-✓ Uses Redis server time (clock skew resistant)
-✓ Has connection resilience with exponential backoff
-
-Would you like me to send the updated code for another review pass?
+[Claude Pane - automatically reads response]
+Claude: Codex completed the review. Here are the findings:
+        [Presents Codex's analysis]
 ```
 
 ---
@@ -231,35 +204,33 @@ Would you like me to send the updated code for another review pass?
 ## Architecture
 
 ```
-┌───────────────────┬───────────────────┐
-│    Claude Code    │     Codex CLI     │
-│  (Primary Agent)  │ (Secondary Agent) │
-├───────────────────┼───────────────────┤
-│ • Orchestrates    │ • Deep analysis   │
-│ • Plans           │ • Security review │
-│ • Quick tasks     │ • Complex impl    │
-│ • Delegates       │ • Edge cases      │
-└─────────┬─────────┴─────────┬─────────┘
-          │                   │
-          │  .agent-collab/   │
-          │ ┌───────────────┐ │
-          └►│ status        │◄┘
-            │ requests/     │
-            │ responses/    │
-            │ context/      │
-            └───────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              Claude Code                                    │
+│                                                                             │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────────────┐ │
+│  │  MCP Tools       │  │  Skills (tmux)   │  │  Skills (Chrome)          │ │
+│  │  delegate_codex_*│  │  /codex-review   │  │  /chatgpt-code-review     │ │
+│  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬─────────────┘ │
+└───────────┼─────────────────────┼──────────────────────────┼───────────────┘
+            │                     │                          │
+            ▼                     ▼                          ▼
+┌───────────────────┐  ┌───────────────────┐  ┌───────────────────────────┐
+│  codex-delegate   │  │  .agent-collab/   │  │  Chrome + chat.com        │
+│  MCP Server       │  │  (file-based IPC) │  │  (browser automation)     │
+│                   │  │                   │  │                           │
+│  Spawns codex CLI │  │  requests/task.md │  │  JavaScript injection     │
+└─────────┬─────────┘  └─────────┬─────────┘  └─────────────┬─────────────┘
+          │                      │                          │
+          ▼                      ▼                          ▼
+┌───────────────────────────────────────┐  ┌────────────────────────────────┐
+│             Codex CLI                 │  │        GPT-5.2 Pro             │
+│                                       │  │                                │
+│  Deep code review • Implementation    │  │  Extended thinking (5-30 min)  │
+│  Security analysis • Plan review      │  │  200k context • Deep analysis  │
+└───────────────────────────────────────┘  └────────────────────────────────┘
 ```
 
-### Communication Protocol
-
-1. **Claude** writes task to `requests/task.md`
-2. **Claude** sets `status` to `pending`
-3. **Claude** triggers Codex via tmux
-4. **Codex** sets `status` to `working`
-5. **Codex** completes task, writes to `responses/response.md`
-6. **Codex** sets `status` to `done`
-7. **Claude** reads response and presents to user
-8. **Claude** resets `status` to `idle`
+---
 
 ## Configuration
 
@@ -276,42 +247,105 @@ E-commerce platform using FastAPI + Redis + PostgreSQL
 ## Architecture Decisions
 - All auth uses JWT with refresh rotation
 - Redis for rate limiting and session storage
-- PostgreSQL for persistent data
 
 ## Conventions
 - Type hints required on all functions
 - Pydantic models for all API schemas
-- pytest for testing
-
-## Current Focus
-Implementing authentication system
 ```
 
-### Proactive Reviews
+### Claude Settings
 
-By default, Claude will automatically delegate to Codex for review after significant implementations. To disable this, edit the skill description in `~/.claude/skills/codex-review/SKILL.md`.
+The setup script configures `~/.claude/settings.json` with:
+
+```json
+{
+  "mcpServers": {
+    "codex-delegate": {
+      "command": "node",
+      "args": ["/path/to/dual-agent/agent/dist/mcp.js"]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cat .agent-collab:*)",
+      "Bash(tmux send-keys:*)",
+      ...
+    ]
+  }
+}
+```
+
+---
+
+## Tmux Key Bindings
+
+| Keys | Action |
+|------|--------|
+| `Ctrl-b ←/→` | Switch between Claude and Codex panes |
+| `Ctrl-b d` | Detach from session |
+| `Ctrl-b z` | Zoom current pane (fullscreen toggle) |
+
+---
 
 ## Troubleshooting
 
-### Codex not receiving tasks
+### MCP tools not available
+
+1. Check the setup completed successfully:
+   ```bash
+   cat ~/.claude/settings.json | jq '.mcpServers'
+   ```
+
+2. Restart Claude Code:
+   ```bash
+   claude
+   ```
+
+### Codex not receiving tasks (tmux mode)
 
 1. Check tmux pane numbers: `tmux list-panes`
 2. Ensure Codex is running in pane 1
 3. Manually trigger: `tmux send-keys -t 1 '/read-task' Enter`
 
-### Permission prompts appearing
+### Status stuck (tmux mode)
 
-Re-run setup to ensure permissions are configured:
-```bash
-./setup-dual-agent.sh
-```
-
-### Status stuck
-
-Reset manually:
 ```bash
 echo "idle" > .agent-collab/status
 ```
+
+### Codex not working
+
+```bash
+# Verify codex is installed and authenticated
+codex "hello"
+```
+
+---
+
+## Project Structure
+
+```
+dual-agent/
+├── agent/                    # MCP server & CLI
+│   ├── src/
+│   │   ├── mcp.ts           # MCP server (delegate_codex_* tools)
+│   │   ├── cli.ts           # CLI wrapper
+│   │   └── codex.ts         # Codex subprocess spawner
+│   └── dist/                # Compiled JS
+├── .claude/skills/          # Claude Code skills
+│   ├── codex-review/        # /codex-review (tmux mode)
+│   ├── codex-implement/     # /codex-implement (tmux mode)
+│   ├── codex-plan-review/   # /codex-plan-review (tmux mode)
+│   ├── codex-read/          # /codex-read (tmux mode)
+│   ├── codex-status/        # /codex-status (tmux mode)
+│   └── chatgpt-code-review/ # /chatgpt-code-review (Chrome)
+├── .codex/skills/           # Codex CLI skills
+├── setup-dual-agent.sh      # Setup script
+├── start-dual-agent.sh      # Tmux launcher
+└── README.md
+```
+
+---
 
 ## License
 

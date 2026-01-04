@@ -105,12 +105,12 @@ tmux split-window -h -t "$SESSION_NAME:0" -c "$PROJECT_DIR"
 tmux select-pane -t "$SESSION_NAME:0.0" -T "Claude (Primary)"
 tmux select-pane -t "$SESSION_NAME:0.1" -T "Codex (Secondary)"
 
-# Start Claude in left pane
+# Start Claude in left pane with --chrome for ChatGPT integration
 tmux send-keys -t "$SESSION_NAME:0.0" "export AGENT_COLLAB_DIR=$AGENT_COLLAB_DIR_ESCAPED" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "echo -e '${GREEN}=== CLAUDE CODE (Primary Agent) ===${NC}'" Enter
-tmux send-keys -t "$SESSION_NAME:0.0" "echo 'Skills: /codex-review, /codex-implement, /codex-plan-review, /codex-read, /codex-status'" Enter
+tmux send-keys -t "$SESSION_NAME:0.0" "echo 'Skills: /codex-review, /codex-implement, /codex-plan-review, /codex-read, /codex-status, /chatgpt-code-review'" Enter
 tmux send-keys -t "$SESSION_NAME:0.0" "echo ''" Enter
-tmux send-keys -t "$SESSION_NAME:0.0" "claude" Enter
+tmux send-keys -t "$SESSION_NAME:0.0" "claude --chrome" Enter
 
 # Start Codex in right pane with max settings
 tmux send-keys -t "$SESSION_NAME:0.1" "export AGENT_COLLAB_DIR=$AGENT_COLLAB_DIR_ESCAPED" Enter
@@ -134,7 +134,7 @@ echo -e "  ${YELLOW}Ctrl-b + Left/Right${NC}  - Switch between panes"
 echo -e "  ${YELLOW}Ctrl-b + d${NC}           - Detach from session"
 echo -e "  ${YELLOW}Ctrl-b + z${NC}           - Zoom current pane"
 echo ""
-echo -e "Claude Skills: ${GREEN}/codex-review${NC}, ${GREEN}/codex-implement${NC}, ${GREEN}/codex-plan-review${NC}, ${GREEN}/codex-read${NC}"
+echo -e "Claude Skills: ${GREEN}/codex-review${NC}, ${GREEN}/codex-implement${NC}, ${GREEN}/codex-plan-review${NC}, ${GREEN}/codex-read${NC}, ${GREEN}/chatgpt-code-review${NC}"
 echo -e "Codex Skills:  ${GREEN}/read-task${NC}, ${GREEN}/respond${NC}, ${GREEN}/claude-status${NC}"
 echo ""
 
