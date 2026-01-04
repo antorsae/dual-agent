@@ -9,20 +9,45 @@ Review code using GPT-5.2 Pro through Claude Code's Chrome browser integration.
 
 ---
 
-## MANDATORY: Newline Handling
+## MANDATORY: Single Message with Complete Code
 
-**STOP. READ THIS BEFORE WRITING ANY JAVASCRIPT.**
+**STOP. READ THESE RULES BEFORE PROCEEDING.**
 
-When building prompts for ChatGPT, you MUST use `String.fromCharCode(10)` for ALL newlines.
+### Rule 1: ONE MESSAGE ONLY
 
-**NEVER use `\n` in strings.** The literal characters `\n` will NOT create newlines — they will appear as-is, creating a single-line prompt that is unreadable.
+Send exactly ONE message to ChatGPT containing BOTH the context AND the complete code.
+
+```
+❌ WRONG: Message 1: "Here's the problem..." → Message 2: "Here's the code..."
+✅ CORRECT: Single message: "Here's the problem... [COMPLETE CODE HERE]"
+```
+
+### Rule 2: SEND THE ACTUAL CODE
+
+Send the COMPLETE, VERBATIM source code. Do NOT:
+- Summarize the code
+- Send "key sections" or excerpts
+- Pre-analyze or describe what the code does
+- Send pseudo-code or simplified versions
+- Truncate large files
+
+```
+❌ WRONG: "The SA validity check (line 720-731) does: [description]"
+❌ WRONG: "// Key perturbation loop (simplified): ..."
+✅ CORRECT: [Paste the actual 3862 lines of code verbatim]
+```
+
+If the file is too large to read at once, read it in chunks and concatenate ALL chunks into the prompt.
+
+### Rule 3: NEWLINE HANDLING
+
+When building prompts, you MUST use `String.fromCharCode(10)` for ALL newlines.
+
+**NEVER use `\n` in strings.** The literal characters `\n` will NOT create newlines.
 
 ```javascript
-// ❌ WRONG - This creates a SINGLE LINE (the \n is literal text):
+// ❌ WRONG - Creates a SINGLE LINE:
 var text = 'Line 1\nLine 2\nLine 3';
-
-// ❌ WRONG - Escaped version is also wrong:
-var text = 'Line 1\\nLine 2\\nLine 3';
 
 // ✅ CORRECT - Use String.fromCharCode(10):
 var nl = String.fromCharCode(10);
@@ -34,10 +59,11 @@ var text = ['Line 1', 'Line 2', 'Line 3'].join(nl);
 ```
 
 **Before submitting JavaScript, verify:**
+- [ ] Sending exactly ONE message (not multiple)
+- [ ] Code is COMPLETE and VERBATIM (not summarized)
 - [ ] `var nl = String.fromCharCode(10);` is declared at the top
 - [ ] Every newline uses `+ nl +` concatenation or `.join(nl)`
 - [ ] NO literal `\n` appears anywhere in the JavaScript code
-- [ ] NO escaped `\\n` appears anywhere in the JavaScript code
 
 ---
 
@@ -85,11 +111,18 @@ When user says "fetch ChatGPT results", "get the ChatGPT response", "check if Ch
 
 ### Step 1: Prepare the Review Prompt
 
-Build the prompt text with these components:
-- System instruction for code review
-- Focus area (security/performance/bugs/general)
-- The code wrapped in markdown code blocks
-- Language identifier if known
+**Build ONE prompt containing EVERYTHING:**
+1. Brief context (what the problem is)
+2. The user's question or focus area
+3. The COMPLETE, VERBATIM source code in markdown code blocks
+
+**DO NOT:**
+- Split into multiple messages
+- Summarize or excerpt the code
+- Pre-analyze or describe the code
+- Send pseudo-code instead of actual code
+
+If reading a large file requires multiple Read calls, concatenate ALL content into a single variable before building the prompt.
 
 ### Step 2: Navigate to ChatGPT
 
@@ -120,35 +153,38 @@ If login required, ask user to authenticate manually, then continue.
 **JavaScript template for prompt entry:**
 
 ```javascript
-// MANDATORY: Declare nl at the top - use for ALL newlines
+// MANDATORY: Declare nl and bt at the top
 var nl = String.fromCharCode(10);
 var bt = String.fromCharCode(96);    // backtick
 
 var el = document.querySelector('#prompt-textarea');
 
-// Build code string - use nl for EVERY line break
-// NEVER use \n - it will appear as literal text!
-var code = 'function example() {' + nl +
-           '    return true;' + nl +
+// THE COMPLETE SOURCE CODE - verbatim, NOT summarized
+// If file has 3862 lines, ALL 3862 lines go here
+var code = '#include <stdio.h>' + nl +
+           '#include <math.h>' + nl +
+           '' + nl +
+           'int main() {' + nl +
+           '    // ... ALL the actual code ...' + nl +
+           '    return 0;' + nl +
            '}';
+// ^^^ This should be the COMPLETE file contents, not excerpts!
 
-// Build prompt using array.join(nl) - cleanest approach
+// Build SINGLE prompt with context + FULL code
 var text = [
-    'You are an expert code reviewer. Provide a thorough review.',
+    'You are an expert C++ performance engineer.',
     '',
-    'Structure your review as:',
-    '1. **Summary**: Brief overall assessment',
-    '2. **Critical Issues**: Bugs, security vulnerabilities, logic errors',
-    '3. **Improvements**: Suggestions for better practices',
-    '4. **Positive Aspects**: What is done well',
+    '## Problem',
+    '[User\'s description of the issue]',
     '',
-    '[FOCUS_INSTRUCTION]',
+    '## Question',
+    '[What the user wants analyzed]',
     '',
-    'Code to review:',
-    bt+bt+bt+'[LANGUAGE]',
-    code,
+    '## Complete Source Code',
+    bt+bt+bt+'cpp',
+    code,   // <-- THE FULL, VERBATIM CODE
     bt+bt+bt
-].join(nl);  // <-- This joins with REAL newlines
+].join(nl);
 
 el.innerText = text;
 el.dispatchEvent(new Event('input', {bubbles: true}));
@@ -156,13 +192,13 @@ el.dispatchEvent(new Event('input', {bubbles: true}));
 
 **Key points:**
 - `var nl = String.fromCharCode(10);` MUST be first line
+- `code` variable must contain the COMPLETE file, not excerpts
+- Send ONE message with context + full code together
 - Use `array.join(nl)` for prompt structure
 - Use `+ nl +` concatenation for code content
-- `String.fromCharCode(96)` for backticks
 - `dispatchEvent` with `input` event triggers React state update
-- Selector is `#prompt-textarea`
 
-**REMINDER: See "MANDATORY: Newline Handling" section at top of this document.**
+**REMINDER: See "MANDATORY" section at top - ONE message, COMPLETE code, proper newlines.**
 
 After JavaScript execution, click the send button or press ENTER to submit.
 
@@ -215,7 +251,9 @@ When embedding source code, **escape special characters**:
 
 | Issue | Action |
 |-------|--------|
-| **Code appears as single line** | **YOU USED `\n` INSTEAD OF `String.fromCharCode(10)`. Re-read MANDATORY section at top. Rebuild JavaScript with `var nl = String.fromCharCode(10);` and use `+ nl +` for ALL newlines.** |
+| **Sent multiple messages** | **WRONG. Delete chat, start over. Send ONE message with context + full code.** |
+| **Code was summarized/excerpted** | **WRONG. You must send COMPLETE, VERBATIM source code. Re-read MANDATORY section.** |
+| **Code appears as single line** | **YOU USED `\n` INSTEAD OF `String.fromCharCode(10)`. Rebuild with `var nl = String.fromCharCode(10);`** |
 | Not logged in | Ask user to log in, retry |
 | Model unavailable | Fall back to GPT-5.2 Thinking |
 | Generation interrupted | New chat and resubmit |
