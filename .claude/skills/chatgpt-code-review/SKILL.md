@@ -7,6 +7,40 @@ description: Review code using GPT-5.2 Pro via Claude Code's Chrome integration.
 
 Review code using GPT-5.2 Pro through Claude Code's Chrome browser integration.
 
+---
+
+## MANDATORY: Newline Handling
+
+**STOP. READ THIS BEFORE WRITING ANY JAVASCRIPT.**
+
+When building prompts for ChatGPT, you MUST use `String.fromCharCode(10)` for ALL newlines.
+
+**NEVER use `\n` in strings.** The literal characters `\n` will NOT create newlines — they will appear as-is, creating a single-line prompt that is unreadable.
+
+```javascript
+// ❌ WRONG - This creates a SINGLE LINE (the \n is literal text):
+var text = 'Line 1\nLine 2\nLine 3';
+
+// ❌ WRONG - Escaped version is also wrong:
+var text = 'Line 1\\nLine 2\\nLine 3';
+
+// ✅ CORRECT - Use String.fromCharCode(10):
+var nl = String.fromCharCode(10);
+var text = 'Line 1' + nl + 'Line 2' + nl + 'Line 3';
+
+// ✅ ALSO CORRECT - Array with join:
+var nl = String.fromCharCode(10);
+var text = ['Line 1', 'Line 2', 'Line 3'].join(nl);
+```
+
+**Before submitting JavaScript, verify:**
+- [ ] `var nl = String.fromCharCode(10);` is declared at the top
+- [ ] Every newline uses `+ nl +` concatenation or `.join(nl)`
+- [ ] NO literal `\n` appears anywhere in the JavaScript code
+- [ ] NO escaped `\\n` appears anywhere in the JavaScript code
+
+---
+
 ## Prerequisites
 
 1. Claude Code with Chrome integration: `claude --chrome`
@@ -74,7 +108,7 @@ If login required, ask user to authenticate manually, then continue.
 
 ### Step 4: Enter the Prompt via JavaScript
 
-**CRITICAL: Use JavaScript injection to enter multi-line text. Other methods fail:**
+**Use JavaScript injection to enter multi-line text. Other methods fail:**
 
 | Method                | Works? | Notes                               |
 |-----------------------|--------|-------------------------------------|
@@ -86,19 +120,25 @@ If login required, ask user to authenticate manually, then continue.
 **JavaScript template for prompt entry:**
 
 ```javascript
-var el = document.querySelector('#prompt-textarea');
-var nl = String.fromCharCode(10);    // newline
+// MANDATORY: Declare nl at the top - use for ALL newlines
+var nl = String.fromCharCode(10);
 var bt = String.fromCharCode(96);    // backtick
 
-// Code can be multi-line - newlines within strings are preserved
-var code = 'line1' + nl + 'line2' + nl + 'line3';
+var el = document.querySelector('#prompt-textarea');
 
+// Build code string - use nl for EVERY line break
+// NEVER use \n - it will appear as literal text!
+var code = 'function example() {' + nl +
+           '    return true;' + nl +
+           '}';
+
+// Build prompt using array.join(nl) - cleanest approach
 var text = [
     'You are an expert code reviewer. Provide a thorough review.',
     '',
     'Structure your review as:',
     '1. **Summary**: Brief overall assessment',
-    '2. **Critical Issues**: Bugs, security vulnerabilities, logic errors', 
+    '2. **Critical Issues**: Bugs, security vulnerabilities, logic errors',
     '3. **Improvements**: Suggestions for better practices',
     '4. **Positive Aspects**: What is done well',
     '',
@@ -106,44 +146,25 @@ var text = [
     '',
     'Code to review:',
     bt+bt+bt+'[LANGUAGE]',
-    code,   // multi-line content - newlines preserved
+    code,
     bt+bt+bt
-].join(nl);
+].join(nl);  // <-- This joins with REAL newlines
 
 el.innerText = text;
 el.dispatchEvent(new Event('input', {bubbles: true}));
 ```
 
 **Key points:**
-- `String.fromCharCode(10)` for newlines (avoids escaping issues)
+- `var nl = String.fromCharCode(10);` MUST be first line
+- Use `array.join(nl)` for prompt structure
+- Use `+ nl +` concatenation for code content
 - `String.fromCharCode(96)` for backticks
 - `dispatchEvent` with `input` event triggers React state update
 - Selector is `#prompt-textarea`
-- **Newlines within strings are preserved** — no need to split into separate array elements
+
+**REMINDER: See "MANDATORY: Newline Handling" section at top of this document.**
 
 After JavaScript execution, click the send button or press ENTER to submit.
-
-### CRITICAL: Use Actual Newline Characters
-
-**The most common mistake is using literal `\n` (two characters: backslash + n) instead of actual newline characters (char code 10).**
-
-❌ **WRONG** — literal backslash-n (will appear as single line):
-```javascript
-var code = 'line1\\nline2\\nline3';
-```
-
-✅ **CORRECT** — actual newline characters:
-```javascript
-var nl = String.fromCharCode(10);
-var code = 'line1' + nl + 'line2' + nl + 'line3';
-```
-
-✅ **ALSO CORRECT** — template literal with real line breaks:
-```javascript
-var code = `line1
-line2
-line3`;
-```
 
 ### Step 5: Submit and Return Immediately
 
@@ -194,10 +215,10 @@ When embedding source code, **escape special characters**:
 
 | Issue | Action |
 |-------|--------|
+| **Code appears as single line** | **YOU USED `\n` INSTEAD OF `String.fromCharCode(10)`. Re-read MANDATORY section at top. Rebuild JavaScript with `var nl = String.fromCharCode(10);` and use `+ nl +` for ALL newlines.** |
 | Not logged in | Ask user to log in, retry |
 | Model unavailable | Fall back to GPT-5.2 Thinking |
 | Generation interrupted | New chat and resubmit |
 | JavaScript selector fails | Page may have updated; inspect for new selector |
-| Code appears as single line | Newlines are literal `\n` not char code 10; use `String.fromCharCode(10)` |
 | Can't find ChatGPT tab | Ask user which tab has the response |
 | Rate limited | Wait and retry |
