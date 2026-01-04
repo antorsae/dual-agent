@@ -22,39 +22,38 @@ Send exactly ONE message to ChatGPT containing BOTH the context AND the complete
 ✅ CORRECT: Single message: "Here's the problem... [COMPLETE CODE HERE]"
 ```
 
-### Rule 2: SEND THE ACTUAL CODE
+### Rule 2: SEND THE ACTUAL CODE - NO EXCEPTIONS
 
-Send the COMPLETE, VERBATIM source code. Do NOT:
-- Summarize the code
-- Send "key sections" or excerpts
-- Pre-analyze or describe what the code does
-- Send pseudo-code or simplified versions
-- Truncate large files
+Send the COMPLETE, VERBATIM source code.
+
+**PROHIBITED ACTIONS (if you do any of these, you are violating the skill):**
+- ❌ Sending only "key sections" or "performance-critical parts"
+- ❌ Summarizing or describing what the code does
+- ❌ Using base64 encoding
+- ❌ Saying "the file is too large" and truncating
+- ❌ Providing a "technical description" instead of code
+- ❌ Any "practical approach" that avoids sending the full code
+
+**GPT-5.2 has 200k token context. A 3000-line file is ~15k tokens. IT WILL FIT.**
 
 ```
-❌ WRONG: "The SA validity check (line 720-731) does: [description]"
-❌ WRONG: "// Key perturbation loop (simplified): ..."
-✅ CORRECT: [Paste the actual 3862 lines of code verbatim]
+❌ WRONG: "Let me send the performance-critical sections..."
+❌ WRONG: "Given the file size, let me provide a technical description..."
+❌ WRONG: base64 -i file.cpp | ...
+✅ CORRECT: Send ALL 3256 lines verbatim
 ```
 
-If the file is too large to read at once, read it in chunks and concatenate ALL chunks into the prompt.
+If the file is too large to read at once, read ALL chunks and concatenate them. Then send EVERYTHING.
 
 ### Rule 3: BUILD JAVASCRIPT USING THIS ALGORITHM
 
-After reading file content, use this algorithm to build the JavaScript:
+After reading file content, use this EXACT algorithm to build the JavaScript:
 
 ```python
-# ALGORITHM: Transform file content into JavaScript code string
 def build_javascript_for_chatgpt(file_content: str, context: str) -> str:
     """
     Transforms file content into injectable JavaScript.
-
-    Args:
-        file_content: The complete source code read from file
-        context: Brief description of what to analyze
-
-    Returns:
-        JavaScript code to execute in browser console
+    WORKS FOR FILES UP TO 10,000+ LINES.
     """
     # Step 1: Split content into lines
     lines = file_content.split('\n')
@@ -64,33 +63,27 @@ def build_javascript_for_chatgpt(file_content: str, context: str) -> str:
     for line in lines:
         # Escape backslashes first, then single quotes
         escaped = line.replace('\\', '\\\\').replace("'", "\\'")
-        escaped_lines.append(escaped)
+        escaped_lines.append("'" + escaped + "'")
 
-    # Step 3: Build the code variable with + nl + joins
-    # Format: 'line1' + nl + 'line2' + nl + 'line3'
-    code_parts = ["'" + line + "'" for line in escaped_lines]
-    code_js = " + nl +\n".join(code_parts)
+    # Step 3: Build JavaScript array of lines (more efficient than + nl +)
+    lines_array = ',\n'.join(escaped_lines)
 
     # Step 4: Build complete JavaScript
     javascript = f"""var nl = String.fromCharCode(10);
 var bt = String.fromCharCode(96);
 var el = document.querySelector('#prompt-textarea');
-var code = {code_js};
-var text = [
-'{context}',
-'',
-'Complete source code:',
-bt+bt+bt,
-code,
-bt+bt+bt
-].join(nl);
+var codeLines = [
+{lines_array}
+];
+var code = codeLines.join(nl);
+var text = '{context}' + nl + nl + 'Complete source code:' + nl + bt+bt+bt + nl + code + nl + bt+bt+bt;
 el.innerText = text;
 el.dispatchEvent(new Event('input', {{bubbles: true}}));"""
 
     return javascript
 ```
 
-**USE THIS ALGORITHM.** Do not manually construct the JavaScript.
+**MANDATORY: Execute this algorithm. Do not improvise, do not use base64, do not truncate.**
 
 ---
 
