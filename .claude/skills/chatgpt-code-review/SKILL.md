@@ -13,14 +13,16 @@ Review code using GPT-5.2 Pro through Claude Code's Chrome browser integration.
 
 **Upload files directly to ChatGPT. Do NOT paste code into the prompt.**
 
-ChatGPT has a file upload feature. Use it:
-- Click the **(+) Add files** button, OR
-- Press **CMD+U** (Mac) / **CTRL+U** (Windows)
-- Select the source file(s) to upload
-- Type your question in the prompt (referencing the uploaded files)
-- Submit
+**LIMITATION: Claude cannot interact with native OS file dialogs.** The file picker that opens when clicking "Add files" is an OS-level dialog.
 
-This avoids all newline/escaping issues.
+**Workflow:**
+1. Claude navigates to ChatGPT and selects GPT-5.2 Pro
+2. Claude tells user the file path to upload
+3. **User manually uploads the file** (drag-drop or CMD+U)
+4. Claude enters the prompt text
+5. Submit
+
+This avoids all newline/escaping issues by keeping code in the uploaded file.
 
 ---
 
@@ -47,17 +49,21 @@ This avoids all newline/escaping issues.
 2. Select **"GPT-5.2 Pro"** (or "Pro" option)
 3. Accept any warnings about extended thinking time
 
-### Step 3: Upload the File(s)
+### Step 3: Upload the File(s) - REQUIRES USER ACTION
 
-**Use CMD+U or click the (+) Add files button:**
+**Claude cannot interact with native OS file dialogs. The user must upload the file manually.**
 
-1. Press `CMD+U` to open file picker, OR
-2. Click the **(+)** button next to the prompt input
-3. Select **"Upload from computer"**
-4. Navigate to and select the source file(s)
-5. Wait for upload to complete (file appears as attachment)
+1. Tell the user: "Please upload the file manually. I'll provide the prompt."
+2. Provide the full file path for the user to upload:
+   ```
+   File to upload: /path/to/mandelbrot.cpp
+   ```
+3. Wait for user confirmation that the file is uploaded
+4. OR: Ask user to drag-drop the file onto the ChatGPT input area
 
-**Upload the COMPLETE file(s). Do not truncate or excerpt.**
+**Alternative - Check if file is already attached:**
+- Look for file attachment indicators in the chat input area
+- If user says "file uploaded" or "ready", proceed to Step 4
 
 ### Step 4: Type the Prompt
 
