@@ -153,7 +153,7 @@ claude
 
 ### Using MCP Tools
 
-```
+````
 You: I just implemented authentication. Review src/auth.ts using codex
      for security vulnerabilities.
 
@@ -177,7 +177,7 @@ Claude: Codex found the following issues:
    Using MD5 instead of bcrypt/argon2.
 
 ...
-```
+````
 
 ### Using Tmux Dual-Pane
 
@@ -203,31 +203,31 @@ Claude: Codex completed the review. Here are the findings:
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────────────────┐
-│                              Claude Code                                    │
-│                                                                             │
-│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────────────────┐ │
-│  │  MCP Tools       │  │  Skills (tmux)   │  │  Skills (Chrome)          │ │
-│  │  delegate_codex_*│  │  /codex-review   │  │  /chatgpt-code-review     │ │
-│  └────────┬─────────┘  └────────┬─────────┘  └─────────────┬─────────────┘ │
-└───────────┼─────────────────────┼──────────────────────────┼───────────────┘
-            │                     │                          │
-            ▼                     ▼                          ▼
-┌───────────────────┐  ┌───────────────────┐  ┌───────────────────────────┐
-│  codex-delegate   │  │  .agent-collab/   │  │  Chrome + chat.com        │
-│  MCP Server       │  │  (file-based IPC) │  │  (browser automation)     │
-│                   │  │                   │  │                           │
-│  Spawns codex CLI │  │  requests/task.md │  │  JavaScript injection     │
-└─────────┬─────────┘  └─────────┬─────────┘  └─────────────┬─────────────┘
-          │                      │                          │
-          ▼                      ▼                          ▼
-┌───────────────────────────────────────┐  ┌────────────────────────────────┐
-│             Codex CLI                 │  │        GPT-5.2 Pro             │
-│                                       │  │                                │
-│  Deep code review • Implementation    │  │  Extended thinking (5-30 min)  │
-│  Security analysis • Plan review      │  │  200k context • Deep analysis  │
-└───────────────────────────────────────┘  └────────────────────────────────┘
+```text
++-----------------------------------------------------------------------------------+
+|                                    Claude Code                                    |
+|                                                                                   |
+|+-----------------------+  +-----------------------+  +---------------------------+|
+||       MCP Tools       |  |     Skills (tmux)     |  |      Skills (Chrome)      ||
+||   delegate_codex_*    |  |     /codex-review     |  |   /chatgpt-code-review    ||
+|+-----------+-----------+  +-----------+-----------+  +-------------+-------------+|
++------------+--------------------------+----------------------------+--------------+
+             |                          |                            |
+             v                          v                            v
+ +-----------------------+  +-----------------------+  +---------------------------+
+ |    codex-delegate     |  |    .agent-collab/     |  |     Chrome + chat.com     |
+ |      MCP Server       |  |   (file-based IPC)    |  |   (browser automation)    |
+ |                       |  |                       |  |                           |
+ |   Spawns codex CLI    |  |   requests/task.md    |  |   JavaScript injection    |
+ +-----------+-----------+  +-----------+-----------+  +-------------+-------------+
+             |                          |                            |
+             v                          v                            v
+ +-----------+--------------------------+-----------+  +-------------+-------------+
+ |                    Codex CLI                     |  |        GPT-5.2 Pro        |
+ |                                                  |  |                           |
+ |        Deep code review & Implementation         |  | Extended thinking (5-30m) |
+ |         Security analysis & Plan review          |  |  200k context + analysis  |
+ +--------------------------------------------------+  +---------------------------+
 ```
 
 ---
