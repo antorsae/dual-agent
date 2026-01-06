@@ -9,20 +9,11 @@ Review code using GPT-5.2 Pro through Claude Code's Chrome browser integration.
 
 ---
 
-## METHOD: FILE UPLOAD (NOT TEXT INJECTION)
+## METHOD: JSON-ENCODED TEXT INJECTION
 
-**Upload files directly to ChatGPT. Do NOT paste code into the prompt.**
+Inject the complete code into ChatGPT's prompt using JavaScript with JSON encoding to preserve newlines.
 
-**LIMITATION: Claude cannot interact with native OS file dialogs.** The file picker that opens when clicking "Add files" is an OS-level dialog.
-
-**Workflow:**
-1. Claude navigates to ChatGPT and selects GPT-5.2 Pro
-2. Claude tells user the file path to upload
-3. **User manually uploads the file** (drag-drop or CMD+U)
-4. Claude enters the prompt text
-5. Submit
-
-This avoids all newline/escaping issues by keeping code in the uploaded file.
+**The key insight:** Use `JSON.stringify()` on the file content, then `JSON.parse()` in the injected JavaScript. This correctly preserves all newlines and special characters.
 
 ---
 
@@ -37,90 +28,81 @@ This avoids all newline/escaping issues by keeping code in the uploaded file.
 
 ## Workflow
 
-### Step 1: Navigate to ChatGPT
+### Step 1: Read the Complete File
+
+Read the ENTIRE file. If too large for one read, read in chunks and concatenate.
+
+```
+content = Read(file.cpp)  // Get ALL content
+```
+
+### Step 2: Navigate to ChatGPT
 
 1. Navigate to `https://chat.com`
 2. Wait for page load
-3. Verify logged in (chat interface visible)
+3. Verify logged in
 
-### Step 2: Select GPT-5.2 Pro
+### Step 3: Select GPT-5.2 Pro
 
 1. Click model selector dropdown
-2. Select **"GPT-5.2 Pro"** (or "Pro" option)
-3. Accept any warnings about extended thinking time
+2. Select **"GPT-5.2 Pro"**
 
-### Step 3: Upload the File(s) - REQUIRES USER ACTION
+### Step 4: Build and Execute JavaScript
 
-**Claude cannot interact with native OS file dialogs. The user must upload the file manually.**
+**USE THIS EXACT ALGORITHM:**
 
-1. Tell the user: "Please upload the file manually. I'll provide the prompt."
-2. Provide the full file path for the user to upload:
-   ```
-   File to upload: /path/to/mandelbrot.cpp
-   ```
-3. Wait for user confirmation that the file is uploaded
-4. OR: Ask user to drag-drop the file onto the ChatGPT input area
+```python
+import json
 
-**Alternative - Check if file is already attached:**
-- Look for file attachment indicators in the chat input area
-- If user says "file uploaded" or "ready", proceed to Step 4
+def build_javascript(file_content: str, context: str) -> str:
+    """
+    Build JavaScript that injects the prompt into ChatGPT.
+    Uses JSON encoding to preserve ALL newlines and special characters.
+    """
+    # Combine context and code into one prompt
+    full_prompt = f"""{context}
 
-### Step 4: Type the Prompt
-
-Type your question/context in the prompt field. Reference the uploaded file by name:
-
+Complete source code:
 ```
-Analyze the uploaded mandelbrot.cpp for performance optimization opportunities.
+{file_content}
+```"""
 
-Context:
-- Current render time: ~22 seconds for 1200x800 at zoom 1.2e18
-- All optimizations (SA, BLA, block, cache) show minimal speedup
-- Need 10-20x improvement
+    # JSON.stringify handles ALL escaping correctly
+    json_encoded = json.dumps(full_prompt)
 
-Focus on:
-1. Why is SA showing 0% skip rate?
-2. Bottlenecks in the perturbation loop
-3. Specific code changes for 10-20x speedup
+    # Build JavaScript that parses the JSON to get the string with real newlines
+    javascript = f"""var el = document.querySelector('#prompt-textarea');
+var text = JSON.parse({json_encoded});
+el.innerText = text;
+el.dispatchEvent(new Event('input', {{bubbles: true}}));"""
+
+    return javascript
 ```
 
-**The prompt is just context/questions. The code is in the uploaded file.**
+**Example output:**
+```javascript
+var el = document.querySelector('#prompt-textarea');
+var text = JSON.parse("Analyze this code:\\n\\n```\\n#include <stdio.h>\\nint main() {\\n    return 0;\\n}\\n```");
+el.innerText = text;
+el.dispatchEvent(new Event('input', {bubbles: true}));
+```
 
-### Step 5: Submit and Return
+The `\n` inside the JSON string is correct - `JSON.parse()` converts them to real newlines.
+
+### Step 5: Submit
 
 1. Click send button or press ENTER
-2. Verify message was sent (appears in chat with file attachment)
-3. **Do NOT wait for completion** - GPT-5.2 Pro takes 5-30+ minutes
-4. Return to user:
+2. Verify message was sent
+3. Return immediately - do NOT wait for completion
 
-> "Submitted to GPT-5.2 Pro with mandelbrot.cpp attached. This typically takes 5-30 minutes.
-> You can continue working — just ask me to 'fetch ChatGPT results' when ready."
+> "Submitted to GPT-5.2 Pro. This typically takes 5-30 minutes.
+> Ask me to 'fetch ChatGPT results' when ready."
 
 ### Step 6: Fetch Results (on user request)
 
-When user asks to fetch/check results:
-
-1. Navigate to the ChatGPT tab
-2. Check if generation is complete (no spinner, no "Stop generating" button)
-3. If still generating: report status
-4. If complete: extract and return the response
-
----
-
-## Multiple Files
-
-To upload multiple files:
-
-1. Press CMD+U
-2. Select multiple files (CMD+click or SHIFT+click)
-3. Or repeat the upload process for each file
-
-Reference all files in your prompt:
-```
-Analyze the uploaded files:
-- mandelbrot.cpp (main renderer)
-- simd_utils.h (SIMD helpers)
-- Makefile (build config)
-```
+1. Navigate to ChatGPT tab
+2. Check if complete (no spinner)
+3. Extract and return response
 
 ---
 
@@ -128,19 +110,12 @@ Analyze the uploaded files:
 
 | Issue | Action |
 |-------|--------|
-| File upload not working | Try CMD+U instead of clicking (+) |
-| File too large | ChatGPT accepts files up to 512MB - this should not happen |
-| Not logged in | Ask user to log in, retry |
+| Code appears as single line | You did NOT use JSON.parse(). Re-read Step 4. |
+| Not logged in | Ask user to log in |
 | Model unavailable | Fall back to GPT-5.2 Thinking |
-| Can't find ChatGPT tab | Ask user which tab has the response |
 
 ---
 
 ## Non-Blocking Workflow
 
-**GPT-5.2 Pro can take 5-30+ minutes. Use a submit-then-fetch pattern:**
-
-1. **Submit**: Upload file, enter prompt, submit, return immediately
-2. **Fetch**: When user asks, check if complete and retrieve response
-
-Do NOT block waiting for GPT to finish.
+GPT-5.2 Pro takes 5-30+ minutes. Submit and return immediately. Fetch results when user asks.
