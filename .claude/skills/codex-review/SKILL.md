@@ -58,10 +58,10 @@ Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 [Current timestamp]
 
 ## Files to Review
-[List files with full paths]
+[List files with FULL ABSOLUTE paths, e.g. /Users/antor/project/src/main.cpp]
 
-## Code Content
-[Include the actual code]
+**NOTE: Codex runs in the same working directory and CAN read these files directly.
+Do NOT copy file contents here. Just list the paths and Codex will read them.**
 
 ## Review Focus
 - Look for bugs, edge cases, logic errors

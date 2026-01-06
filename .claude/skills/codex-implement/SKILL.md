@@ -62,8 +62,8 @@ Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 [Detailed description]
 
 ## Target Files
-- Primary: [main file path]
-- Secondary: [supporting files]
+- Primary: [FULL ABSOLUTE path, e.g. /Users/antor/project/src/feature.cpp]
+- Secondary: [supporting file paths]
 
 ## Requirements
 1. [Requirement 1]
@@ -73,11 +73,14 @@ Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 ## Interfaces & Contracts
 [Interfaces the code must satisfy]
 
-## Existing Code Context
-[Relevant existing code to integrate with]
+## Context Files to Read
+[List FULL ABSOLUTE paths of existing files Codex should read for context]
+
+**NOTE: Codex runs in the same working directory and CAN read files directly.
+Do NOT copy file contents here. Just list paths and Codex will read them.**
 
 ## Patterns to Follow
-[Reference existing patterns]
+[Reference existing patterns by file path]
 
 ## Constraints
 - [List constraints]

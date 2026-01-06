@@ -86,6 +86,12 @@ Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 
 ## Constraints
 [Constraints to respect]
+
+## Files to Read for Context
+[List FULL ABSOLUTE paths of any files Codex should read to understand the codebase]
+
+**NOTE: Codex runs in the same working directory and CAN read files directly.
+Reference files by path rather than copying content.**
 ```
 
 ### 3. Update Status
