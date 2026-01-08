@@ -82,9 +82,9 @@ This opens a split tmux session with Claude (left) and Codex (right).
 
 | Claude Skills | Codex Skills |
 |---------------|--------------|
-| `/codex-review` | `/read-task` |
-| `/codex-implement` | `/respond` |
-| `/codex-plan-review` | `/claude-status` |
+| `/codex-review` | `$read-task` |
+| `/codex-implement` | `$respond` |
+| `/codex-plan-review` | `$claude-status` |
 | `/codex-read` | |
 | `/codex-status` | |
 
@@ -305,7 +305,7 @@ The setup script configures `~/.claude/settings.json` with:
 
 1. Check tmux pane numbers: `tmux list-panes`
 2. Ensure Codex is running in pane 1
-3. Manually trigger: `tmux send-keys -t 1 '/read-task' Enter`
+3. Manually trigger: `tmux send-keys -t 1 '$read-task' Enter`
 
 ### Status stuck (tmux mode)
 
