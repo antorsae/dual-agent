@@ -127,6 +127,46 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} No local Codex skills found, using project-local skills"
 fi
 
+# Check for additional Codex configurations (e.g., ~/.codex-api/)
+ADDITIONAL_CODEX_DIRS=()
+for codex_dir in "$HOME"/.codex*/; do
+    # Skip the main ~/.codex/ directory we already handled
+    if [ "$codex_dir" = "$HOME/.codex/" ]; then
+        continue
+    fi
+    # Check if this directory has a config.toml
+    if [ -f "${codex_dir}config.toml" ]; then
+        ADDITIONAL_CODEX_DIRS+=("$codex_dir")
+    fi
+done
+
+if [ ${#ADDITIONAL_CODEX_DIRS[@]} -gt 0 ] && [ -d "$SCRIPT_DIR/.codex/skills" ]; then
+    echo ""
+    echo -e "${YELLOW}Found additional Codex configurations:${NC}"
+    for codex_dir in "${ADDITIONAL_CODEX_DIRS[@]}"; do
+        echo -e "  - ${BLUE}${codex_dir}${NC}"
+    done
+    echo ""
+    read -p "Install Codex skills to these directories as well? [y/N] " -n 1 -r
+    echo ""
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        for codex_dir in "${ADDITIONAL_CODEX_DIRS[@]}"; do
+            skills_dir="${codex_dir}skills"
+            mkdir -p "$skills_dir"
+            for skill_dir in "$SCRIPT_DIR/.codex/skills"/*/; do
+                if [ -f "${skill_dir}SKILL.md" ]; then
+                    skill_name=$(basename "$skill_dir")
+                    mkdir -p "$skills_dir/$skill_name"
+                    cp -r "$skill_dir"* "$skills_dir/$skill_name/"
+                    echo -e "  ${GREEN}[OK]${NC} Installed skill '$skill_name' to ${codex_dir}"
+                fi
+            done
+        done
+    else
+        echo -e "  ${YELLOW}[SKIP]${NC} Skipping additional Codex directories"
+    fi
+fi
+
 echo ""
 
 # Configure Claude Code settings
