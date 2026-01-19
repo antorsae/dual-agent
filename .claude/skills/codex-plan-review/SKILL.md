@@ -1,6 +1,6 @@
 ---
 name: codex-plan-review
-description: Send implementation plan to Codex for critique and validation. Use PROACTIVELY after you produce a non-trivial plan (including after /plan mode) unless the user opts out, or when the user says review plan, codex plan review, or wants architectural feedback.
+description: "[TMUX MODE] Send plan to Codex via tmux file-based IPC. Only use when user explicitly runs /codex-plan-review command. For natural language requests, use the delegate_codex_plan_review MCP tool instead."
 ---
 
 # Codex Plan Review Skill
@@ -17,6 +17,23 @@ Send an implementation plan to Codex for critical analysis and validation.
 - If you are in plan mode and have a plan, run this review *before* presenting the final plan or asking "Ready to code?"
 
 ## Steps
+
+### 0. Check for Tmux
+
+First, verify we're running in tmux. Run this check:
+
+```bash
+[ -n "$TMUX" ] && echo "TMUX_OK" || echo "NOT_IN_TMUX"
+```
+
+**If NOT_IN_TMUX**: Stop immediately and tell the user:
+> "This skill requires tmux dual-pane mode. You're not in tmux.
+>
+> Instead, just ask me naturally: **'review this plan with codex'** and I'll use the MCP tool which works without tmux."
+
+Do not proceed with the remaining steps if not in tmux.
+
+### 1. Resolve .agent-collab Directory
 
 Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
 
@@ -41,7 +58,7 @@ fi
 
 If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
 
-### 1. Gather the Plan
+### 2. Gather the Plan
 
 Ensure plan includes:
 - Overall approach
@@ -56,7 +73,7 @@ If you are in plan mode, do not finalize or present the plan yet. Delegate to Co
 
 If the user explicitly says to skip plan review, do not run this skill.
 
-### 2. Write Review Request
+### 3. Write Review Request
 
 Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 
@@ -94,21 +111,21 @@ Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 Reference files by path rather than copying content.**
 ```
 
-### 3. Update Status
+### 4. Update Status
 
 Write `pending` to `$AGENT_COLLAB_DIR/status`
 
-### 4. Trigger Codex
+### 5. Trigger Codex
 
 ```bash
 tmux send-keys -t 1 '$read-task' && sleep 0.5 && tmux send-keys -t 1 Enter Enter
 ```
 
-### 5. Notify User
+### 6. Notify User
 
 Tell user briefly that plan was sent to Codex for review and that you'll return with feedback before implementation. Do not ask the user to proceed yet.
 
-### 6. Wait for Codex (Background Polling)
+### 7. Wait for Codex (Background Polling)
 
 Start a background polling loop to wait for Codex to complete. Run this EXACT bash command (with `$AGENT_COLLAB_DIR/status`) using the Bash tool with `run_in_background: true`:
 
@@ -118,7 +135,7 @@ while [ "$(cat "$AGENT_COLLAB_DIR/status")" != "done" ]; do sleep 3; done; echo 
 
 CRITICAL: Use the resolved `$AGENT_COLLAB_DIR/status` path so polling works outside the project root. Use background execution so you can continue helping the user while waiting.
 
-### 7. Auto-Read Response
+### 8. Auto-Read Response
 
 When poll completes, automatically:
 1. Read `$AGENT_COLLAB_DIR/responses/response.md`

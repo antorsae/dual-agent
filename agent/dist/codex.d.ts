@@ -19,6 +19,7 @@ export interface CodexResult {
 export declare function runCodex(task: CodexTask, options?: {
     stream?: boolean;
     timeout?: number;
+    onProgress?: (lines: number) => void;
 }): Promise<CodexResult>;
 /**
  * Run Codex and write result to a file (for .agent-collab integration)

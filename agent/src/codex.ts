@@ -38,10 +38,33 @@ function log(msg: string, color = colors.dim) {
 }
 
 /**
+ * Check if user prompt contains custom focus/emphasis keywords
+ */
+function hasCustomFocus(prompt: string): boolean {
+  const focusKeywords = [
+    /\bfocus\s+(on|specifically)?\b/i,
+    /\bemphasis\s+on\b/i,
+    /\bemphasiz(e|ing)\b/i,
+    /\bspecifically\b/i,
+    /\bparticularly\b/i,
+    /\bconcentrate\s+on\b/i,
+    /\bprioritiz(e|ing)\b/i,
+    /\bpay\s+(attention|special\s+attention)\s+to\b/i,
+    /\bespecially\b/i,
+    /\bprimarily\b/i,
+    /\bmainly\b/i,
+    /\blook\s+(for|at)\b/i,
+    /\bcheck\s+for\b/i,
+  ];
+  return focusKeywords.some((pattern) => pattern.test(prompt));
+}
+
+/**
  * Build a structured prompt for Codex based on task type
  */
 function buildPrompt(task: CodexTask): string {
-  const typeInstructions: Record<TaskType, string> = {
+  // Default instructions when user doesn't specify focus
+  const defaultInstructions: Record<TaskType, string> = {
     review: `Perform a thorough code review. Analyze:
 - Bugs, logic errors, edge cases
 - Security vulnerabilities
@@ -63,15 +86,34 @@ Be specific with file/line references. Provide fixed code examples.`,
 - What are the risks?
 Provide specific, actionable feedback.`,
 
-    custom: "", // User provides full prompt
+    custom: "",
+  };
+
+  // Minimal instructions when user specifies their own focus
+  const minimalInstructions: Record<TaskType, string> = {
+    review: `Perform a code review based on the user's specific focus below.
+Be specific with file/line references. Provide fixed code examples where relevant.`,
+
+    implement: `Implement based on the user's specific requirements below.
+Follow existing code patterns and handle edge cases.`,
+
+    "plan-review": `Analyze this implementation plan based on the user's specific concerns below.
+Provide specific, actionable feedback.`,
+
+    custom: "",
   };
 
   if (task.type === "custom") {
     return task.prompt;
   }
 
+  const userHasCustomFocus = hasCustomFocus(task.prompt);
+  const instructions = userHasCustomFocus
+    ? minimalInstructions[task.type]
+    : defaultInstructions[task.type];
+
   let prompt = `# Task: ${task.type.toUpperCase()}\n\n`;
-  prompt += `${typeInstructions[task.type]}\n\n`;
+  prompt += `${instructions}\n\n`;
   prompt += `## Request\n\n${task.prompt}\n`;
 
   if (task.files?.length) {
@@ -88,9 +130,13 @@ Provide specific, actionable feedback.`,
  */
 export async function runCodex(
   task: CodexTask,
-  options: { stream?: boolean; timeout?: number } = {}
+  options: {
+    stream?: boolean;
+    timeout?: number;
+    onProgress?: (lines: number) => void;
+  } = {}
 ): Promise<CodexResult> {
-  const { stream = true, timeout = 5 * 60 * 1000 } = options;
+  const { stream = true, timeout = 2 * 60 * 60 * 1000, onProgress } = options;
   const prompt = buildPrompt(task);
   const cwd = task.cwd || process.cwd();
 
@@ -101,9 +147,10 @@ export async function runCodex(
 
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
+    let lineCount = 0;
 
     // Spawn codex with full-auto mode
-    const proc = spawn("codex", ["--full-auto", prompt], {
+    const proc = spawn("codex", ["exec", "--full-auto", prompt], {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, FORCE_COLOR: "0" },
@@ -123,12 +170,24 @@ export async function runCodex(
       if (stream) {
         process.stdout.write(chunk);
       }
+      // Count newlines for progress tracking
+      const newLines = chunk.toString().split("\n").length - 1;
+      if (newLines > 0) {
+        lineCount += newLines;
+        onProgress?.(lineCount);
+      }
     });
 
     proc.stderr.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
       if (stream) {
         process.stderr.write(chunk);
+      }
+      // Count newlines for progress tracking
+      const newLines = chunk.toString().split("\n").length - 1;
+      if (newLines > 0) {
+        lineCount += newLines;
+        onProgress?.(lineCount);
       }
     });
 

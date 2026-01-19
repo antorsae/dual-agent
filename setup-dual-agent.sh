@@ -20,7 +20,58 @@ echo -e "${BLUE}  Dual Agent Environment Setup${NC}"
 echo -e "${BLUE}=======================================${NC}"
 echo ""
 
+# Detect OS and package manager
+detect_os() {
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        OS="macos"
+        PKG_MANAGER="brew"
+    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        OS="linux"
+        if command -v apt-get &> /dev/null; then
+            PKG_MANAGER="apt"
+        elif command -v dnf &> /dev/null; then
+            PKG_MANAGER="dnf"
+        elif command -v yum &> /dev/null; then
+            PKG_MANAGER="yum"
+        elif command -v pacman &> /dev/null; then
+            PKG_MANAGER="pacman"
+        elif command -v zypper &> /dev/null; then
+            PKG_MANAGER="zypper"
+        elif command -v apk &> /dev/null; then
+            PKG_MANAGER="apk"
+        else
+            PKG_MANAGER="unknown"
+        fi
+    elif [[ "$OSTYPE" == "msys" ]] || [[ "$OSTYPE" == "cygwin" ]]; then
+        OS="windows"
+        PKG_MANAGER="none"
+    else
+        OS="unknown"
+        PKG_MANAGER="unknown"
+    fi
+    echo -e "  ${BLUE}[INFO]${NC} Detected OS: $OS ($PKG_MANAGER)"
+}
+
+# Get install command for a package based on OS/package manager
+get_install_hint() {
+    local pkg="$1"
+    case "$PKG_MANAGER" in
+        brew)    echo "brew install $pkg" ;;
+        apt)     echo "sudo apt install $pkg" ;;
+        dnf)     echo "sudo dnf install $pkg" ;;
+        yum)     echo "sudo yum install $pkg" ;;
+        pacman)  echo "sudo pacman -S $pkg" ;;
+        zypper)  echo "sudo zypper install $pkg" ;;
+        apk)     echo "sudo apk add $pkg" ;;
+        *)       echo "install $pkg using your package manager" ;;
+    esac
+}
+
 # Check for required tools
+echo -e "${YELLOW}Checking system...${NC}"
+detect_os
+echo ""
+
 echo -e "${YELLOW}Checking dependencies...${NC}"
 
 check_install() {
@@ -53,10 +104,10 @@ check_tmux_version() {
 }
 
 MISSING=0
-check_install tmux "Install with: brew install tmux" || MISSING=1
+check_install tmux "$(get_install_hint tmux)" || MISSING=1
 check_install claude "Install from: https://github.com/anthropics/claude-code" || MISSING=1
 check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
-check_install jq "Install with: brew install jq" || MISSING=1
+check_install jq "$(get_install_hint jq)" || MISSING=1
 check_install node "Install from: https://nodejs.org" || MISSING=1
 
 if command -v tmux &> /dev/null; then
@@ -69,6 +120,62 @@ if [ $MISSING -eq 1 ]; then
     exit 1
 fi
 
+echo ""
+
+# Install notification dependencies based on OS
+echo -e "${YELLOW}Checking notification support...${NC}"
+
+install_notifications() {
+    case "$OS" in
+        macos)
+            # macOS has osascript built-in
+            echo -e "  ${GREEN}[OK]${NC} osascript (built-in)"
+            ;;
+        linux)
+            if command -v notify-send &> /dev/null; then
+                echo -e "  ${GREEN}[OK]${NC} notify-send"
+            else
+                echo -e "  ${YELLOW}[MISSING]${NC} notify-send - needed for desktop notifications"
+
+                # Try to install automatically
+                case "$PKG_MANAGER" in
+                    apt)
+                        echo -e "  ${BLUE}[INFO]${NC} Installing libnotify-bin..."
+                        sudo apt-get install -y libnotify-bin && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
+                        ;;
+                    dnf|yum)
+                        echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
+                        sudo $PKG_MANAGER install -y libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
+                        ;;
+                    pacman)
+                        echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
+                        sudo pacman -S --noconfirm libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
+                        ;;
+                    zypper)
+                        echo -e "  ${BLUE}[INFO]${NC} Installing libnotify-tools..."
+                        sudo zypper install -y libnotify-tools && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
+                        ;;
+                    apk)
+                        echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
+                        sudo apk add libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
+                        ;;
+                    *)
+                        echo -e "  ${YELLOW}[WARN]${NC} Please install libnotify manually for desktop notifications"
+                        ;;
+                esac
+            fi
+            ;;
+        windows)
+            echo -e "  ${YELLOW}[INFO]${NC} Windows detected. For notifications, install BurntToast:"
+            echo -e "           ${BLUE}Install-Module -Name BurntToast${NC}"
+            ;;
+        *)
+            echo -e "  ${YELLOW}[WARN]${NC} Unknown OS - notifications may not work"
+            ;;
+    esac
+}
+
+install_notifications
 echo ""
 
 # Build the codex-delegate agent
@@ -184,15 +291,11 @@ DUAL_AGENT_PERMISSIONS='[
   "Bash(tmux send-keys:*)"
 ]'
 
-# MCP server configuration for codex-delegate
-MCP_SERVER_PATH="$AGENT_DIR/dist/mcp.js"
-MCP_CONFIG="{\"command\": \"node\", \"args\": [\"$MCP_SERVER_PATH\"]}"
-
+# Configure permissions in settings.json
 if [ -f "$CLAUDE_SETTINGS" ]; then
-    # File exists - merge settings
+    # File exists - merge permissions
     EXISTING=$(cat "$CLAUDE_SETTINGS")
 
-    # Merge permissions
     if echo "$EXISTING" | jq -e '.permissions.allow' > /dev/null 2>&1; then
         MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
             .permissions.allow = (.permissions.allow + $new | unique)
@@ -203,40 +306,47 @@ if [ -f "$CLAUDE_SETTINGS" ]; then
         ')
     fi
 
-    # Add MCP server if agent was built
-    if [ -f "$MCP_SERVER_PATH" ]; then
-        MERGED=$(echo "$MERGED" | jq --argjson mcp "$MCP_CONFIG" '
-            .mcpServers["codex-delegate"] = $mcp
-        ')
-        echo -e "  ${GREEN}[OK]${NC} Added codex-delegate MCP server"
-    fi
-
     echo "$MERGED" > "$CLAUDE_SETTINGS"
-    echo -e "  ${GREEN}[OK]${NC} Merged settings into existing config"
+    echo -e "  ${GREEN}[OK]${NC} Merged permissions into existing config"
 else
-    # Create new settings file
+    # Create new settings file with permissions only
     mkdir -p "$HOME/.claude"
-    if [ -f "$MCP_SERVER_PATH" ]; then
-        cat > "$CLAUDE_SETTINGS" << EOF
+    cat > "$CLAUDE_SETTINGS" << EOF
 {
   "permissions": {
     "allow": $DUAL_AGENT_PERMISSIONS
-  },
-  "mcpServers": {
-    "codex-delegate": $MCP_CONFIG
   }
 }
 EOF
-        echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions and MCP server"
+    echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
+fi
+
+# Add MCP server using claude mcp add (Claude Code v2.1+)
+MCP_SERVER_PATH="$AGENT_DIR/dist/mcp.js"
+if [ -f "$MCP_SERVER_PATH" ]; then
+    echo -e "${YELLOW}Configuring MCP server...${NC}"
+    # Remove existing server first (ignore errors if it doesn't exist)
+    claude mcp remove codex-delegate --scope user 2>/dev/null || true
+    # Add the MCP server globally
+    if claude mcp add --scope user codex-delegate -- node "$MCP_SERVER_PATH" 2>/dev/null; then
+        echo -e "  ${GREEN}[OK]${NC} Added codex-delegate MCP server (global)"
     else
-        cat > "$CLAUDE_SETTINGS" << EOF
-{
-  "permissions": {
-    "allow": $DUAL_AGENT_PERMISSIONS
-  }
-}
-EOF
-        echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
+        echo -e "  ${YELLOW}[WARN]${NC} Failed to add MCP server via CLI, trying manual config..."
+        # Fallback: add to ~/.claude.json manually
+        CLAUDE_JSON="$HOME/.claude.json"
+        if [ -f "$CLAUDE_JSON" ]; then
+            EXISTING=$(cat "$CLAUDE_JSON")
+            UPDATED=$(echo "$EXISTING" | jq --arg path "$MCP_SERVER_PATH" '
+                .mcpServers["codex-delegate"] = {
+                    "type": "stdio",
+                    "command": "node",
+                    "args": [$path],
+                    "env": {}
+                }
+            ')
+            echo "$UPDATED" > "$CLAUDE_JSON"
+            echo -e "  ${GREEN}[OK]${NC} Added MCP server to ~/.claude.json"
+        fi
     fi
 fi
 

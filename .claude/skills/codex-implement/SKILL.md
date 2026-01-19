@@ -1,6 +1,6 @@
 ---
 name: codex-implement
-description: Delegate complex implementation tasks to Codex. Use when user says codex implement, delegate implementation, or has a complex coding task.
+description: "[TMUX MODE] Delegate implementation to Codex via tmux file-based IPC. Only use when user explicitly runs /codex-implement command. For natural language requests, use the delegate_codex_implement MCP tool instead."
 ---
 
 # Codex Implement Skill
@@ -14,6 +14,23 @@ Delegate complex implementation tasks to the Codex agent for high-quality code.
 - User explicitly wants Codex to implement
 
 ## Steps
+
+### 0. Check for Tmux
+
+First, verify we're running in tmux. Run this check:
+
+```bash
+[ -n "$TMUX" ] && echo "TMUX_OK" || echo "NOT_IN_TMUX"
+```
+
+**If NOT_IN_TMUX**: Stop immediately and tell the user:
+> "This skill requires tmux dual-pane mode. You're not in tmux.
+>
+> Instead, just ask me naturally: **'implement this with codex'** and I'll use the MCP tool which works without tmux."
+
+Do not proceed with the remaining steps if not in tmux.
+
+### 1. Resolve .agent-collab Directory
 
 Before any file operations, resolve the `.agent-collab` directory so commands work outside the project root:
 
@@ -38,7 +55,7 @@ fi
 
 If `$AGENT_COLLAB_DIR` does not exist, stop and ask for the project root.
 
-### 1. Gather Requirements
+### 2. Gather Requirements
 
 From user, collect:
 - What needs implementing
@@ -46,7 +63,7 @@ From user, collect:
 - Constraints and patterns to follow
 - Dependencies and interfaces
 
-### 2. Create Implementation Spec
+### 3. Create Implementation Spec
 
 Write to `$AGENT_COLLAB_DIR/requests/task.md`:
 
@@ -86,21 +103,21 @@ Do NOT copy file contents here. Just list paths and Codex will read them.**
 - [List constraints]
 ```
 
-### 3. Update Status
+### 4. Update Status
 
 Write `pending` to `$AGENT_COLLAB_DIR/status`
 
-### 4. Trigger Codex
+### 5. Trigger Codex
 
 ```bash
 tmux send-keys -t 1 '$read-task' && sleep 0.5 && tmux send-keys -t 1 Enter Enter
 ```
 
-### 5. Notify User
+### 6. Notify User
 
 Tell user briefly that implementation was delegated to Codex.
 
-### 6. Wait for Codex (Background Polling)
+### 7. Wait for Codex (Background Polling)
 
 Start a background polling loop to wait for Codex to complete. Run this EXACT bash command (with `$AGENT_COLLAB_DIR/status`) using the Bash tool with `run_in_background: true`:
 
@@ -112,7 +129,7 @@ Note: Use 5 second intervals since implementations take longer.
 
 CRITICAL: Use the resolved `$AGENT_COLLAB_DIR/status` path so polling works outside the project root. Use background execution so you can continue helping the user while waiting.
 
-### 7. Auto-Read Response
+### 8. Auto-Read Response
 
 When poll completes, automatically:
 1. Read `$AGENT_COLLAB_DIR/responses/response.md`
