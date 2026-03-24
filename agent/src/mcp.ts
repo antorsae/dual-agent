@@ -61,9 +61,13 @@ interface BackgroundTask {
   endTime?: number;
   result?: CodexResult;
   progressLines: number;
+  lastChecked: number;
 }
 
 const tasks = new Map<string, BackgroundTask>();
+
+// Minimum seconds between status checks (while running)
+const MIN_CHECK_INTERVAL = 60;
 
 // 2 hour timeout
 const DEFAULT_TIMEOUT = 2 * 60 * 60 * 1000;
@@ -214,6 +218,7 @@ function startBackgroundTask(
     status: "running",
     startTime: Date.now(),
     progressLines: 0,
+    lastChecked: 0,
   };
 
   tasks.set(taskId, task);
@@ -297,6 +302,26 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const elapsed = formatDuration(Date.now() - task.startTime);
 
     if (task.status === "running") {
+      const now = Date.now();
+      const secondsSinceLastCheck = (now - task.lastChecked) / 1000;
+
+      // Rate limit: reject if checked too recently
+      if (task.lastChecked > 0 && secondsSinceLastCheck < MIN_CHECK_INTERVAL) {
+        const waitMore = Math.ceil(MIN_CHECK_INTERVAL - secondsSinceLastCheck);
+        return {
+          content: [{
+            type: "text",
+            text: `**RATE LIMITED**: You checked ${Math.floor(secondsSinceLastCheck)}s ago.\n\n` +
+                  `⛔ Do NOT check again for ${waitMore} more seconds.\n\n` +
+                  `Tell the user: "Codex is still working. I'll check back in a minute, or you can ask me to check status when you're ready."\n\n` +
+                  `**DO SOMETHING ELSE NOW. DO NOT CALL THIS TOOL AGAIN.**`,
+          }],
+          isError: true,
+        };
+      }
+
+      task.lastChecked = now;
+
       return {
         content: [{
           type: "text",
@@ -306,9 +331,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
                 `**Progress**: ${task.progressLines} lines of output\n` +
                 `**Prompt**: ${task.prompt}\n\n` +
                 `⏳ Task is still running. Codex reviews typically take 2-10 minutes.\n\n` +
-                `**IMPORTANT**: Do NOT poll continuously. Tell the user the task is running and ` +
-                `let them know they can ask "check codex status" when ready. ` +
-                `Continue helping with other tasks in the meantime.`,
+                `**STOP. Do not check status again.** Tell the user:\n` +
+                `"Codex is working on it (${elapsed} elapsed, ${task.progressLines} lines so far). ` +
+                `You'll get a desktop notification when it's done, or ask me to 'check codex status' later."\n\n` +
+                `Now help with something else or wait for the user to ask.`,
         }],
       };
     }

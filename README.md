@@ -1,10 +1,10 @@
 # Dual Agent Development Environment
 
-A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI) and **ChatGPT Pro** (GPT-5.2 Pro), enabling you to leverage the strengths of multiple AI models.
+A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI, GPT-5.3) and **ChatGPT Pro** (GPT-5.2 Pro), enabling you to leverage the strengths of multiple AI models.
 
 ## Why Multiple Agents?
 
-| Claude Code (Primary) | Codex CLI | ChatGPT Pro (GPT-5.2) |
+| Claude Code (Primary) | Codex CLI (GPT-5.3) | ChatGPT Pro (GPT-5.2) |
 |-----------------------|-----------|----------------------|
 | Fast iteration & prototyping | Deep, thorough code review | Extended thinking for complex analysis |
 | Planning & orchestration | Complex algorithm implementation | 200k context for large codebases |
@@ -223,7 +223,7 @@ Claude: Codex completed the review. Here are the findings:
              |                          |                            |
              v                          v                            v
  +-----------+--------------------------+-----------+  +-------------+-------------+
- |                    Codex CLI                     |  |        GPT-5.2 Pro        |
+ |                Codex CLI (GPT-5.3)               |  |        GPT-5.2 Pro        |
  |                                                  |  |                           |
  |        Deep code review & Implementation         |  | Extended thinking (5-30m) |
  |         Security analysis & Plan review          |  |  200k context + analysis  |
