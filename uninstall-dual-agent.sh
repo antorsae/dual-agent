@@ -92,36 +92,33 @@ for codex_dir in "$HOME"/.codex*/; do
     fi
 done
 
-# 4. Remove dual-agent permissions from Claude settings
-echo -e "${YELLOW}Removing dual-agent permissions from Claude settings...${NC}"
+# 4. Remove dual-agent permissions and MCP server from Claude settings
+echo -e "${YELLOW}Removing dual-agent config from Claude settings...${NC}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
-DUAL_AGENT_PERMISSIONS=(
-    'Bash(cat .agent-collab:*)'
-    'Bash(echo idle > .agent-collab/status)'
-    'Bash(echo pending > .agent-collab/status)'
-    'Bash(echo working > .agent-collab/status)'
-    'Bash(echo done > .agent-collab/status)'
-    'Bash(while [ "$(cat .agent-collab/status)" != "done" ]; do sleep:*)'
-    'Bash(tmux send-keys:*)'
-)
-
 if [ -f "$CLAUDE_SETTINGS" ] && command -v jq &>/dev/null; then
-    if jq -e '.permissions.allow' "$CLAUDE_SETTINGS" >/dev/null 2>&1; then
-        # Build jq filter to remove each permission
-        JQ_FILTER='.permissions.allow'
-        for perm in "${DUAL_AGENT_PERMISSIONS[@]}"; do
-            JQ_FILTER="$JQ_FILTER | map(select(. != $(jq -n --arg p "$perm" '$p')))"
-        done
-        UPDATED=$(jq "$JQ_FILTER" "$CLAUDE_SETTINGS" | jq -s '.[0] as $perms | input | .permissions.allow = $perms' - "$CLAUDE_SETTINGS")
-        echo "$UPDATED" > "$CLAUDE_SETTINGS"
-        echo -e "  ${GREEN}[OK]${NC} Removed dual-agent permissions"
-        REMOVED=$((REMOVED + 1))
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} No permissions.allow found in settings"
-    fi
+    # Use a temp file for the jq filter to avoid shell quoting issues
+    # with embedded $() and double quotes in permission strings
+    TMPJQ=$(mktemp)
+    cat > "$TMPJQ" <<'JQEOF'
+.permissions.allow -= [
+  "Bash(cat .agent-collab:*)",
+  "Bash(echo idle > .agent-collab/status)",
+  "Bash(echo pending > .agent-collab/status)",
+  "Bash(echo working > .agent-collab/status)",
+  "Bash(echo done > .agent-collab/status)",
+  "Bash(while [ \"$(cat .agent-collab/status)\" != \"done\" ]; do sleep:*)",
+  "Bash(tmux send-keys:*)"
+]
+| del(.mcpServers["codex-delegate"])
+JQEOF
+    UPDATED=$(jq -f "$TMPJQ" "$CLAUDE_SETTINGS")
+    rm -f "$TMPJQ"
+    echo "$UPDATED" > "$CLAUDE_SETTINGS"
+    echo -e "  ${GREEN}[OK]${NC} Removed dual-agent permissions and MCP server from settings"
+    REMOVED=$((REMOVED + 1))
 else
-    echo -e "  ${YELLOW}[SKIP]${NC} Claude settings file not found"
+    echo -e "  ${YELLOW}[SKIP]${NC} Claude settings file not found or jq not available"
 fi
 
 # 5. Remove .agent-collab directory
