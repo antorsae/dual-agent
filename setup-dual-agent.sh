@@ -6,6 +6,7 @@
 # Usage:
 #   ./setup-dual-agent.sh          # Interactive component selection
 #   ./setup-dual-agent.sh --all    # Install all components (non-interactive)
+#   ./setup-dual-agent.sh --pro-worker  # Install only ChatGPT Pro worker for Codex
 #
 
 set -e
@@ -109,21 +110,31 @@ INSTALL_NOTIFICATIONS=0
 INSTALL_MCP=0
 INSTALL_SKILLS=0
 INSTALL_CHATGPT=0
+INSTALL_PRO_WORKER=0
+NONINTERACTIVE=0
 
 if [ "${1:-}" = "--all" ]; then
+    NONINTERACTIVE=1
     INSTALL_NOTIFICATIONS=1
     INSTALL_MCP=1
     INSTALL_SKILLS=1
     INSTALL_CHATGPT=1
+    INSTALL_PRO_WORKER=1
     echo -e "${BLUE}Installing all components (--all)${NC}"
+    echo ""
+elif [ "${1:-}" = "--pro-worker" ] || [ "${1:-}" = "--chatgpt-pro-worker" ]; then
+    NONINTERACTIVE=1
+    INSTALL_PRO_WORKER=1
+    echo -e "${BLUE}Installing ChatGPT Pro worker for Codex only${NC}"
     echo ""
 else
     show_menu() {
-        local n_mark=" " m_mark=" " s_mark=" " c_mark=" "
+        local n_mark=" " m_mark=" " s_mark=" " c_mark=" " p_mark=" "
         [ "$INSTALL_NOTIFICATIONS" -eq 1 ] && n_mark="x"
         [ "$INSTALL_MCP" -eq 1 ] && m_mark="x"
         [ "$INSTALL_SKILLS" -eq 1 ] && s_mark="x"
         [ "$INSTALL_CHATGPT" -eq 1 ] && c_mark="x"
+        [ "$INSTALL_PRO_WORKER" -eq 1 ] && p_mark="x"
 
         echo -e "${BLUE}Select components to install:${NC}"
         echo ""
@@ -131,6 +142,7 @@ else
         echo -e "  ${YELLOW}2)${NC} [${m_mark}] codex-delegate MCP for Claude"
         echo -e "  ${YELLOW}3)${NC} [${s_mark}] Claude <-> Codex skills (tmux based)"
         echo -e "  ${YELLOW}4)${NC} [${c_mark}] ChatGPT Pro code review (Chrome extension)"
+        echo -e "  ${YELLOW}5)${NC} [${p_mark}] ChatGPT Pro worker for Codex (MCP + skill)"
         echo ""
         echo -e "  ${YELLOW}a)${NC} Select all    ${YELLOW}n)${NC} Select none    ${YELLOW}c)${NC} Confirm"
         echo ""
@@ -138,15 +150,16 @@ else
 
     while true; do
         show_menu
-        read -p "Toggle [1-4] or confirm [c]: " -n 1 -r choice
+        read -p "Toggle [1-5] or confirm [c]: " -n 1 -r choice
         echo ""
         case "$choice" in
             1) INSTALL_NOTIFICATIONS=$(( 1 - INSTALL_NOTIFICATIONS )) ;;
             2) INSTALL_MCP=$(( 1 - INSTALL_MCP )) ;;
             3) INSTALL_SKILLS=$(( 1 - INSTALL_SKILLS )) ;;
             4) INSTALL_CHATGPT=$(( 1 - INSTALL_CHATGPT )) ;;
-            a|A) INSTALL_NOTIFICATIONS=1; INSTALL_MCP=1; INSTALL_SKILLS=1; INSTALL_CHATGPT=1 ;;
-            n|N) INSTALL_NOTIFICATIONS=0; INSTALL_MCP=0; INSTALL_SKILLS=0; INSTALL_CHATGPT=0 ;;
+            5) INSTALL_PRO_WORKER=$(( 1 - INSTALL_PRO_WORKER )) ;;
+            a|A) INSTALL_NOTIFICATIONS=1; INSTALL_MCP=1; INSTALL_SKILLS=1; INSTALL_CHATGPT=1; INSTALL_PRO_WORKER=1 ;;
+            n|N) INSTALL_NOTIFICATIONS=0; INSTALL_MCP=0; INSTALL_SKILLS=0; INSTALL_CHATGPT=0; INSTALL_PRO_WORKER=0 ;;
             c|C) break ;;
             *) echo -e "  ${RED}Invalid choice${NC}" ;;
         esac
@@ -154,7 +167,7 @@ else
     done
 fi
 
-if [ "$INSTALL_NOTIFICATIONS" -eq 0 ] && [ "$INSTALL_MCP" -eq 0 ] && [ "$INSTALL_SKILLS" -eq 0 ] && [ "$INSTALL_CHATGPT" -eq 0 ]; then
+if [ "$INSTALL_NOTIFICATIONS" -eq 0 ] && [ "$INSTALL_MCP" -eq 0 ] && [ "$INSTALL_SKILLS" -eq 0 ] && [ "$INSTALL_CHATGPT" -eq 0 ] && [ "$INSTALL_PRO_WORKER" -eq 0 ]; then
     echo ""
     echo -e "${YELLOW}Nothing selected. Exiting.${NC}"
     exit 0
@@ -165,16 +178,18 @@ echo -e "${YELLOW}Checking dependencies...${NC}"
 
 MISSING=0
 
-# claude is always required
-check_install claude "Install from: https://github.com/anthropics/claude-code" || MISSING=1
+# claude is required for Claude MCP/tools and Claude-side skills only
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_CHATGPT" -eq 1 ]; then
+    check_install claude "Install from: https://github.com/anthropics/claude-code" || MISSING=1
+fi
 
-# node is needed for MCP (build + run the agent server)
-if [ "$INSTALL_MCP" -eq 1 ]; then
+# node is needed for MCP servers (build + run the agent server)
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     check_install node "Install from: https://nodejs.org" || MISSING=1
 fi
 
-# codex is needed for MCP delegation and tmux skills
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_SKILLS" -eq 1 ]; then
+# codex is needed for MCP delegation, tmux skills, and the ChatGPT Pro worker
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 fi
 
@@ -259,22 +274,31 @@ fi
 
 AGENT_DIR="$SCRIPT_DIR/agent"
 
-if [ "$INSTALL_MCP" -eq 1 ]; then
-    # Build the codex-delegate agent
-    echo -e "${YELLOW}Building codex-delegate agent...${NC}"
-
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
+    # Build the shared agent package that contains MCP servers
+    echo -e "${YELLOW}Building agent MCP servers...${NC}"
     if [ -d "$AGENT_DIR" ]; then
         cd "$AGENT_DIR"
-        if [ ! -d "node_modules" ]; then
-            npm install --silent 2>/dev/null
-        fi
+        npm install --silent 2>/dev/null
         npm run build --silent 2>/dev/null
-        echo -e "  ${GREEN}[OK]${NC} Built codex-delegate MCP server"
+        echo -e "  ${GREEN}[OK]${NC} Built agent MCP servers"
+        if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
+            echo -e "${YELLOW}Installing Playwright Chromium for ChatGPT Pro worker...${NC}"
+            if npx playwright install chromium >/dev/null 2>&1; then
+                echo -e "  ${GREEN}[OK]${NC} Playwright Chromium installed"
+            else
+                echo -e "  ${YELLOW}[WARN]${NC} Failed to install Playwright Chromium automatically"
+                echo -e "           Run manually: ${BLUE}cd \"$AGENT_DIR\" && npx playwright install chromium${NC}"
+                echo -e "           If Linux system libraries are missing, run: ${BLUE}npx playwright install-deps chromium${NC}"
+            fi
+        fi
         cd "$SCRIPT_DIR"
     else
         echo -e "  ${YELLOW}[SKIP]${NC} agent/ directory not found"
     fi
+fi
 
+if [ "$INSTALL_MCP" -eq 1 ]; then
     # Add MCP server using claude mcp add (Claude Code v2.1+)
     MCP_SERVER_PATH="$AGENT_DIR/dist/mcp.js"
     if [ -f "$MCP_SERVER_PATH" ]; then
@@ -302,6 +326,22 @@ if [ "$INSTALL_MCP" -eq 1 ]; then
                 echo -e "  ${GREEN}[OK]${NC} Added MCP server to ~/.claude.json"
             fi
         fi
+    fi
+fi
+
+if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
+    PRO_MCP_SERVER_PATH="$AGENT_DIR/dist/chatgptProMcp.js"
+    if [ -f "$PRO_MCP_SERVER_PATH" ]; then
+        echo -e "${YELLOW}Configuring ChatGPT Pro worker MCP for Codex...${NC}"
+        codex mcp remove chatgpt-pro-worker 2>/dev/null || true
+        if codex mcp add chatgpt-pro-worker -- node "$PRO_MCP_SERVER_PATH" 2>/dev/null; then
+            echo -e "  ${GREEN}[OK]${NC} Added chatgpt-pro-worker MCP server to Codex"
+        else
+            echo -e "  ${RED}[WARN]${NC} Failed to add chatgpt-pro-worker MCP server via codex CLI"
+            echo -e "           Run manually: ${BLUE}codex mcp add chatgpt-pro-worker -- node \"$PRO_MCP_SERVER_PATH\"${NC}"
+        fi
+    else
+        echo -e "  ${YELLOW}[SKIP]${NC} ChatGPT Pro worker MCP build output not found"
     fi
 fi
 
@@ -342,7 +382,7 @@ if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_CHATGPT" -eq 1 ]; then
     fi
 fi
 
-if [ "$INSTALL_SKILLS" -eq 1 ]; then
+if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     # Create global Codex skills directory
     echo -e "${YELLOW}Setting up Codex CLI skills...${NC}"
     CODEX_SKILLS_DIR="$HOME/.codex/skills"
@@ -353,6 +393,16 @@ if [ "$INSTALL_SKILLS" -eq 1 ]; then
         for skill_dir in "$SCRIPT_DIR/.codex/skills"/*/; do
             if [ -f "${skill_dir}SKILL.md" ]; then
                 skill_name=$(basename "$skill_dir")
+
+                # chatgpt-pro-worker is a separate install option
+                if [[ "$skill_name" == "chatgpt-pro-worker" ]] && [ "$INSTALL_PRO_WORKER" -eq 0 ]; then
+                    continue
+                fi
+                # all other Codex skills belong to the tmux skill option
+                if [[ "$skill_name" != "chatgpt-pro-worker" ]] && [ "$INSTALL_SKILLS" -eq 0 ]; then
+                    continue
+                fi
+
                 mkdir -p "$CODEX_SKILLS_DIR/$skill_name"
                 cp -r "$skill_dir"* "$CODEX_SKILLS_DIR/$skill_name/"
                 echo -e "  ${GREEN}[OK]${NC} Installed Codex skill: $skill_name"
@@ -382,15 +432,27 @@ if [ "$INSTALL_SKILLS" -eq 1 ]; then
             echo -e "  - ${BLUE}${codex_dir}${NC}"
         done
         echo ""
-        read -p "Install Codex skills to these directories as well? [y/N] " -n 1 -r
-        echo ""
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
+        if [ "$NONINTERACTIVE" -eq 1 ]; then
+            echo -e "  ${YELLOW}[SKIP]${NC} Non-interactive install: skipping additional Codex directories"
+        else
+            read -p "Install Codex skills to these directories as well? [y/N] " -n 1 -r
+            echo ""
+        fi
+        if [ "$NONINTERACTIVE" -eq 0 ] && [[ $REPLY =~ ^[Yy]$ ]]; then
             for codex_dir in "${ADDITIONAL_CODEX_DIRS[@]}"; do
                 skills_dir="${codex_dir}skills"
                 mkdir -p "$skills_dir"
                 for skill_dir in "$SCRIPT_DIR/.codex/skills"/*/; do
                     if [ -f "${skill_dir}SKILL.md" ]; then
                         skill_name=$(basename "$skill_dir")
+
+                        if [[ "$skill_name" == "chatgpt-pro-worker" ]] && [ "$INSTALL_PRO_WORKER" -eq 0 ]; then
+                            continue
+                        fi
+                        if [[ "$skill_name" != "chatgpt-pro-worker" ]] && [ "$INSTALL_SKILLS" -eq 0 ]; then
+                            continue
+                        fi
+
                         mkdir -p "$skills_dir/$skill_name"
                         cp -r "$skill_dir"* "$skills_dir/$skill_name/"
                         echo -e "  ${GREEN}[OK]${NC} Installed skill '$skill_name' to ${codex_dir}"
@@ -398,18 +460,21 @@ if [ "$INSTALL_SKILLS" -eq 1 ]; then
                 done
             done
         else
-            echo -e "  ${YELLOW}[SKIP]${NC} Skipping additional Codex directories"
+            if [ "$NONINTERACTIVE" -eq 0 ]; then
+                echo -e "  ${YELLOW}[SKIP]${NC} Skipping additional Codex directories"
+            fi
         fi
     fi
 
     echo ""
 
-    # Configure Claude Code settings
-    echo -e "${YELLOW}Configuring Claude Code settings...${NC}"
-    CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+    if [ "$INSTALL_SKILLS" -eq 1 ]; then
+        # Configure Claude Code settings
+        echo -e "${YELLOW}Configuring Claude Code settings...${NC}"
+        CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
-    # Permissions needed for dual-agent collaboration
-    DUAL_AGENT_PERMISSIONS='[
+        # Permissions needed for dual-agent collaboration
+        DUAL_AGENT_PERMISSIONS='[
       "Bash(cat .agent-collab:*)",
       "Bash(echo idle > .agent-collab/status)",
       "Bash(echo pending > .agent-collab/status)",
@@ -419,43 +484,43 @@ if [ "$INSTALL_SKILLS" -eq 1 ]; then
       "Bash(tmux send-keys:*)"
     ]'
 
-    # Configure permissions in settings.json
-    if [ -f "$CLAUDE_SETTINGS" ]; then
-        # File exists - merge permissions
-        EXISTING=$(cat "$CLAUDE_SETTINGS")
+        # Configure permissions in settings.json
+        if [ -f "$CLAUDE_SETTINGS" ]; then
+            # File exists - merge permissions
+            EXISTING=$(cat "$CLAUDE_SETTINGS")
 
-        if echo "$EXISTING" | jq -e '.permissions.allow' > /dev/null 2>&1; then
-            MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
+            if echo "$EXISTING" | jq -e '.permissions.allow' > /dev/null 2>&1; then
+                MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
                 .permissions.allow = (.permissions.allow + $new | unique)
             ')
-        else
-            MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
+            else
+                MERGED=$(echo "$EXISTING" | jq --argjson new "$DUAL_AGENT_PERMISSIONS" '
                 .permissions.allow = $new
             ')
-        fi
+            fi
 
-        echo "$MERGED" > "$CLAUDE_SETTINGS"
-        echo -e "  ${GREEN}[OK]${NC} Merged permissions into existing config"
-    else
-        # Create new settings file with permissions only
-        mkdir -p "$HOME/.claude"
-        cat > "$CLAUDE_SETTINGS" << EOF
+            echo "$MERGED" > "$CLAUDE_SETTINGS"
+            echo -e "  ${GREEN}[OK]${NC} Merged permissions into existing config"
+        else
+            # Create new settings file with permissions only
+            mkdir -p "$HOME/.claude"
+            cat > "$CLAUDE_SETTINGS" << EOF
 {
   "permissions": {
     "allow": $DUAL_AGENT_PERMISSIONS
   }
 }
 EOF
-        echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
-    fi
+            echo -e "  ${GREEN}[OK]${NC} Created Claude settings with permissions"
+        fi
 
-    echo ""
+        echo ""
 
-    # Create .agent-collab in current directory
-    echo -e "${YELLOW}Initializing .agent-collab directory...${NC}"
-    mkdir -p .agent-collab/{requests,responses,context}
-    echo "idle" > .agent-collab/status
-    cat > .agent-collab/context/shared.md << 'EOF'
+        # Create .agent-collab in current directory
+        echo -e "${YELLOW}Initializing .agent-collab directory...${NC}"
+        mkdir -p .agent-collab/{requests,responses,context}
+        echo "idle" > .agent-collab/status
+        cat > .agent-collab/context/shared.md << 'EOF'
 # Shared Project Context
 
 This file contains context shared between Claude Code and Codex agents.
@@ -474,32 +539,33 @@ Both agents should read this file to understand the project state.
 <!-- What the team is currently working on -->
 EOF
 
-    cat > .agent-collab/requests/task.md << 'EOF'
+        cat > .agent-collab/requests/task.md << 'EOF'
 # Agent Task Request
 
 No pending tasks.
 EOF
 
-    cat > .agent-collab/responses/response.md << 'EOF'
+        cat > .agent-collab/responses/response.md << 'EOF'
 # Agent Response
 
 No responses yet.
 EOF
 
-    echo -e "  ${GREEN}[OK]${NC} .agent-collab directory initialized"
+        echo -e "  ${GREEN}[OK]${NC} .agent-collab directory initialized"
 
-    echo ""
+        echo ""
 
-    # Add to .gitignore if git repo
-    if [ -d ".git" ]; then
-        echo -e "${YELLOW}Updating .gitignore...${NC}"
-        if ! grep -q ".agent-collab" .gitignore 2>/dev/null; then
-            echo "" >> .gitignore
-            echo "# Dual agent collaboration files" >> .gitignore
-            echo ".agent-collab/" >> .gitignore
-            echo -e "  ${GREEN}[OK]${NC} Added .agent-collab to .gitignore"
-        else
-            echo -e "  ${YELLOW}[SKIP]${NC} .agent-collab already in .gitignore"
+        # Add to .gitignore if git repo
+        if [ -d ".git" ]; then
+            echo -e "${YELLOW}Updating .gitignore...${NC}"
+            if ! grep -q ".agent-collab" .gitignore 2>/dev/null; then
+                echo "" >> .gitignore
+                echo "# Dual agent collaboration files" >> .gitignore
+                echo ".agent-collab/" >> .gitignore
+                echo -e "  ${GREEN}[OK]${NC} Added .agent-collab to .gitignore"
+            else
+                echo -e "  ${YELLOW}[SKIP]${NC} .agent-collab already in .gitignore"
+            fi
         fi
     fi
 fi
@@ -544,5 +610,15 @@ if [ "$INSTALL_CHATGPT" -eq 1 ]; then
     echo -e "  Run: ${GREEN}claude --chrome${NC}"
     echo -e "  Use skill: ${GREEN}/chatgpt-code-review${NC}"
     echo -e "  Requires: ChatGPT Pro subscription, Claude in Chrome extension"
+    echo ""
+fi
+
+if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
+    echo -e "${YELLOW}ChatGPT Pro Worker for Codex${NC}"
+    echo -e "  Use skill: ${GREEN}\$chatgpt-pro-worker${NC}"
+    echo -e "  MCP tools: ${GREEN}login_status${NC}, ${GREEN}open_pro_login${NC}, ${GREEN}submit_pro_task${NC}, ${GREEN}await_pro_task${NC}, ${GREEN}get_pro_task${NC}"
+    echo -e "  Requires: ChatGPT Pro subscription and browser access to ChatGPT"
+    echo -e "  First login requires a GUI, SSH X forwarding, VNC/noVNC, or a copied authenticated Chromium profile."
+    echo -e "  Note: Restart Codex to load the new MCP server and skill."
     echo ""
 fi

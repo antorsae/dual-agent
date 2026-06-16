@@ -1,11 +1,11 @@
 ---
 name: chatgpt-code-review
-description: Review code using GPT-5.2 Pro via Claude Code's Chrome integration. Use when the user asks to review code with ChatGPT, use their ChatGPT Pro subscription, get GPT-5.2 Pro to review code, or wants a second opinion from GPT. Requires Claude Code running with --chrome flag and user logged into chat.com. Triggers on "review with ChatGPT", "ChatGPT Pro review", "GPT-5.2 Pro code review", "get GPT's opinion".
+description: Review code using GPT-5.5 Pro via Claude Code's Chrome integration. Use when the user asks to review code with ChatGPT, use their ChatGPT Pro subscription, get GPT-5.5 Pro to review code, or wants a second opinion from GPT. Requires Claude Code running with --chrome flag and user logged into chat.com. Triggers on "review with ChatGPT", "ChatGPT Pro review", "GPT-5.5 Pro code review", "get GPT's opinion".
 ---
 
 # ChatGPT Code Review via Chrome
 
-Review code using GPT-5.2 Pro through Claude Code's Chrome browser integration.
+Review code using GPT-5.5 Pro through Claude Code's Chrome browser integration.
 
 ---
 
@@ -22,7 +22,7 @@ Inject the complete code into ChatGPT's prompt using JavaScript with JSON encodi
 1. Claude Code with Chrome integration: `claude --chrome`
 2. Claude in Chrome extension installed (v1.0.36+)
 3. User logged into chat.com in Chrome
-4. ChatGPT Pro subscription (for GPT-5.2 Pro access)
+4. ChatGPT Pro subscription (for GPT-5.5 Pro access)
 
 ---
 
@@ -42,10 +42,10 @@ content = Read(file.cpp)  // Get ALL content
 2. Wait for page load
 3. Verify logged in
 
-### Step 3: Select GPT-5.2 Pro
+### Step 3: Select GPT-5.5 Pro
 
 1. Click model selector dropdown
-2. Select **"GPT-5.2 Pro"**
+2. Select **"GPT-5.5 Pro"**
 
 ### Step 4: Build and Execute JavaScript
 
@@ -95,7 +95,7 @@ The `\n` inside the JSON string is correct - `JSON.parse()` converts them to rea
 2. Verify message was sent
 3. Return immediately - do NOT wait for completion
 
-> "Submitted to GPT-5.2 Pro. This typically takes 5-30 minutes.
+> "Submitted to GPT-5.5 Pro. This typically takes 5-30 minutes.
 > Ask me to 'fetch ChatGPT results' when ready."
 
 ### Step 6: Fetch Results (on user request)
@@ -112,10 +112,10 @@ The `\n` inside the JSON string is correct - `JSON.parse()` converts them to rea
 |-------|--------|
 | Code appears as single line | You did NOT use JSON.parse(). Re-read Step 4. |
 | Not logged in | Ask user to log in |
-| Model unavailable | Fall back to GPT-5.2 Thinking |
+| Model unavailable | Fall back to GPT-5.5 Thinking |
 
 ---
 
 ## Non-Blocking Workflow
 
-GPT-5.2 Pro takes 5-30+ minutes. Submit and return immediately. Fetch results when user asks.
+GPT-5.5 Pro takes 5-30+ minutes. Submit and return immediately. Fetch results when user asks.

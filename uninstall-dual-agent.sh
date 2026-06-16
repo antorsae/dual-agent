@@ -23,8 +23,8 @@ echo ""
 # Track what was removed
 REMOVED=0
 
-# 1. Remove MCP server
-echo -e "${YELLOW}Removing MCP server...${NC}"
+# 1. Remove MCP servers
+echo -e "${YELLOW}Removing MCP servers...${NC}"
 if claude mcp remove codex-delegate --scope user 2>/dev/null; then
     echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate MCP server"
     REMOVED=$((REMOVED + 1))
@@ -45,6 +45,13 @@ else
     fi
 fi
 
+if codex mcp remove chatgpt-pro-worker 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed chatgpt-pro-worker MCP server"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} chatgpt-pro-worker MCP server not found"
+fi
+
 # 2. Remove Claude skills
 echo -e "${YELLOW}Removing Claude Code skills...${NC}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
@@ -63,7 +70,7 @@ done
 # 3. Remove Codex skills
 echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
 CODEX_SKILLS_DIR="$HOME/.codex/skills"
-CODEX_SKILLS=(claude-status read-task respond)
+CODEX_SKILLS=(claude-status read-task respond chatgpt-pro-worker)
 
 for skill in "${CODEX_SKILLS[@]}"; do
     if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then

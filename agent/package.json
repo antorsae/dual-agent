@@ -1,7 +1,7 @@
 {
   "name": "codex-delegate",
   "version": "0.1.0",
-  "description": "Thin wrapper for delegating tasks to Codex CLI",
+  "description": "MCP servers for delegating tasks to Codex CLI and ChatGPT Pro",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
@@ -11,10 +11,12 @@
     "build": "tsc",
     "start": "node dist/cli.js",
     "mcp": "node dist/mcp.js",
+    "pro-mcp": "node dist/chatgptProMcp.js",
     "dev": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "playwright": "^1.61.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

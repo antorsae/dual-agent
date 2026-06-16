@@ -1,13 +1,13 @@
 # Dual Agent Development Environment
 
-A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI, GPT-5.3) and **ChatGPT Pro** (GPT-5.2 Pro), enabling you to leverage the strengths of multiple AI models.
+A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI, GPT-5.5) and **ChatGPT Pro** (GPT-5.5 Pro), enabling you to leverage the strengths of multiple AI models.
 
 ## Why Multiple Agents?
 
-| Claude Code (Primary) | Codex CLI (GPT-5.3) | ChatGPT Pro (GPT-5.2) |
+| Claude Code (Primary) | Codex CLI (GPT-5.5) | ChatGPT Pro (GPT-5.5 Pro) |
 |-----------------------|-----------|----------------------|
 | Fast iteration & prototyping | Deep, thorough code review | Extended thinking for complex analysis |
-| Planning & orchestration | Complex algorithm implementation | 200k context for large codebases |
+| Planning & orchestration | Complex algorithm implementation | Maximum context for large codebases |
 | Quick fixes & refactoring | Security vulnerability analysis | Second opinion on architecture |
 | Context switching & multitasking | Meticulous edge case handling | Long-running deep reviews (5-30 min) |
 
@@ -45,7 +45,7 @@ This will:
 
 ---
 
-## Three Ways to Use
+## Four Ways to Use
 
 ### Option 1: MCP Tools (Recommended)
 
@@ -90,7 +90,7 @@ This opens a split tmux session with Claude (left) and Codex (right).
 
 ### Option 3: ChatGPT Code Review (Chrome)
 
-Use GPT-5.2 Pro via Claude Code's Chrome integration for deep, extended-thinking code reviews:
+Use GPT-5.5 Pro via Claude Code's Chrome integration for deep, extended-thinking code reviews:
 
 ```bash
 # Start Claude Code with Chrome integration
@@ -102,7 +102,7 @@ Then ask naturally:
 ```
 You: Review src/auth.ts with ChatGPT
 
-You: Get GPT-5.2 Pro to review this migration plan
+You: Get GPT-5.5 Pro to review this migration plan
 ```
 
 **Prerequisites:**
@@ -111,11 +111,64 @@ You: Get GPT-5.2 Pro to review this migration plan
 - Logged into chat.com with ChatGPT Pro subscription
 
 **Workflow:**
-1. Claude submits the code review request to GPT-5.2 Pro
-2. Returns immediately (non-blocking) - GPT-5.2 can take 5-30 minutes
+1. Claude submits the code review request to GPT-5.5 Pro
+2. Returns immediately (non-blocking) - GPT-5.5 Pro can take 5-30 minutes
 3. Ask Claude to "fetch ChatGPT results" when ready
 
 **Skill:** `/chatgpt-code-review`
+
+### Option 4: ChatGPT Pro Worker for Codex
+
+Use GPT-5.5 Pro as an external worker for arbitrary Codex tasks: implementation, debugging, refactoring, planning, review, or custom analysis. The worker can automate ChatGPT through Playwright using a persistent Chromium profile.
+
+Install only this component:
+
+```bash
+./setup-dual-agent.sh --pro-worker
+```
+
+Then restart Codex and ask:
+
+```
+$chatgpt-pro-worker implement rate limiting for the API and return an apply-ready patch
+
+$chatgpt-pro-worker debug this failing test and ask GPT-5.5 Pro for a unified diff
+```
+
+**Workflow:**
+1. Codex gathers repo context and calls the `chatgpt-pro-worker` MCP server.
+2. The MCP server opens ChatGPT in Playwright Chromium, selects GPT-5.5 Pro when possible, submits the prompt, waits for the answer, and saves the response.
+3. Codex reads the saved result, applies patches when appropriate, and runs verification.
+
+**Login bootstrap:**
+
+The automated worker uses a persistent Chromium profile at `~/.codex/chatgpt-pro-worker/browser-profile`. You must log in to ChatGPT Pro once in that profile.
+
+```text
+open_pro_login
+login_status
+```
+
+On a headless machine with no browser/display, first login cannot be completed purely in the terminal because ChatGPT login may require interactive browser UI, CAPTCHA, passkey, or 2FA. Use one of these:
+
+- Run the Pro worker once on a workstation with a desktop browser, log in, then keep using it there.
+- Use SSH X forwarding or VNC/noVNC on the headless host, then call `open_pro_login` with `headless=false`.
+- Copy a compatible already-authenticated Chromium profile into `~/.codex/chatgpt-pro-worker/browser-profile`.
+
+After login, headless automation can run on the host.
+
+**Available MCP Tools:**
+
+| Tool | Description |
+|------|-------------|
+| `login_status` | Check whether the persistent ChatGPT profile is logged in |
+| `open_pro_login` | Open ChatGPT for one-time login in the persistent profile |
+| `submit_pro_task` | Submit an arbitrary Pro task through automated Playwright Chromium |
+| `await_pro_task` | Wait for an automated task result |
+| `save_pro_result` | Save the completed ChatGPT Pro response |
+| `get_pro_task` | Read job status and saved result |
+| `show_pro_prompt` | Show the prepared Pro prompt |
+| `list_pro_tasks` | List recent Pro jobs |
 
 ---
 
@@ -223,10 +276,10 @@ Claude: Codex completed the review. Here are the findings:
              |                          |                            |
              v                          v                            v
  +-----------+--------------------------+-----------+  +-------------+-------------+
- |                Codex CLI (GPT-5.3)               |  |        GPT-5.2 Pro        |
+ |                Codex CLI (GPT-5.5)               |  |       GPT-5.5 Pro        |
  |                                                  |  |                           |
  |        Deep code review & Implementation         |  | Extended thinking (5-30m) |
- |         Security analysis & Plan review          |  |  200k context + analysis  |
+ |         Security analysis & Plan review          |  | Maximum context + analysis |
  +--------------------------------------------------+  +---------------------------+
 ```
 
@@ -328,7 +381,8 @@ codex "hello"
 dual-agent/
 ├── agent/                    # MCP server & CLI
 │   ├── src/
-│   │   ├── mcp.ts           # MCP server (delegate_codex_* tools)
+│   │   ├── mcp.ts           # Claude MCP server (delegate_codex_* tools)
+│   │   ├── chatgptProMcp.ts # Codex MCP server (ChatGPT Pro worker)
 │   │   ├── cli.ts           # CLI wrapper
 │   │   └── codex.ts         # Codex subprocess spawner
 │   └── dist/                # Compiled JS
@@ -339,7 +393,7 @@ dual-agent/
 │   ├── codex-read/          # /codex-read (tmux mode)
 │   ├── codex-status/        # /codex-status (tmux mode)
 │   └── chatgpt-code-review/ # /chatgpt-code-review (Chrome)
-├── .codex/skills/           # Codex CLI skills
+├── .codex/skills/           # Codex CLI skills, including chatgpt-pro-worker
 ├── setup-dual-agent.sh      # Setup script
 ├── start-dual-agent.sh      # Tmux launcher
 └── README.md
