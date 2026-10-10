@@ -32,14 +32,14 @@ Each tool call spawns a fresh Codex process. Context is passed in the prompt.
 
 ### Prerequisites
 
-`codex-pool` on your PATH and working (set `CODEX_BIN` to run a different Codex binary):
+`codex-pool` or `codex` on your PATH and working (set `CODEX_BIN` to run a different Codex binary):
 
 ```bash
 # Verify codex-pool is installed and authenticated
 codex-pool exec "hello"
 ```
 
-The setup script saves `CODEX_BIN` in the MCP server's environment so the override also applies after restarting Claude. For a manual registration, include it in the server's `env` object.
+The setup script prefers `codex-pool`. If it is unavailable, setup warns and falls back to `codex`. A custom `CODEX_BIN` override must be available. Setup saves the selected binary as `CODEX_BIN` in the MCP server's environment so it also applies after restarting Claude. For a manual registration, include it in the server's `env` object.
 
 ### Install
 

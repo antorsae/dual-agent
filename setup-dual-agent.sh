@@ -193,9 +193,14 @@ if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 fi
 
-# MCP delegation runs codex-pool (override with CODEX_BIN)
+# MCP delegation prefers codex-pool, falling back to codex (override with CODEX_BIN)
 if [ "$INSTALL_MCP" -eq 1 ]; then
-    check_install "${CODEX_BIN:-codex-pool}" "Put it on PATH, or set CODEX_BIN to another Codex binary" || MISSING=1
+    DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
+    if [ "$DELEGATE_CODEX_BIN" = "codex-pool" ] && ! command -v codex-pool &> /dev/null; then
+        echo -e "  ${YELLOW}[WARN]${NC} codex-pool not found on PATH; falling back to codex"
+        DELEGATE_CODEX_BIN="codex"
+    fi
+    check_install "$DELEGATE_CODEX_BIN" "Put it on PATH, or set CODEX_BIN to another Codex binary" || MISSING=1
 fi
 
 # jq is needed for JSON config manipulation (MCP fallback + skills settings)
@@ -310,8 +315,7 @@ if [ "$INSTALL_MCP" -eq 1 ]; then
         echo -e "${YELLOW}Configuring MCP server...${NC}"
         # Remove existing server first (ignore errors if it doesn't exist)
         claude mcp remove codex-delegate --scope user 2>/dev/null || true
-        # Persist the executable override for later Claude sessions.
-        DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
+        # Persist the selected executable for later Claude sessions.
         if claude mcp add --scope user codex-delegate --env "CODEX_BIN=$DELEGATE_CODEX_BIN" -- node "$MCP_SERVER_PATH" 2>/dev/null; then
             echo -e "  ${GREEN}[OK]${NC} Added codex-delegate MCP server (global)"
         else

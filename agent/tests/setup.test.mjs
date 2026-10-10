@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
 
 const settingsModule = new URL("../dist/chatgptSettings.js", import.meta.url).href;
 const codexModule = new URL("../dist/codex.js", import.meta.url).href;
 
-async function fixture(t) {
+async function fixture(t, missingBinaries = []) {
   const dir = await mkdtemp(join(tmpdir(), "dual-agent-setup-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const testHome = join(dir, "managed home");
@@ -25,6 +25,15 @@ async function fixture(t) {
   await writeFile(join(dir, "agent", "dist", "mcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "chatgptProMcp.js"), "");
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
+  await writeFile(log, "");
+  // Isolate PATH so missing-binary tests cannot find a real Codex installation.
+  await symlink(process.execPath, join(bin, "node"));
+  for (const command of ["bash", "dirname", "cat", "jq", "mkdir"]) {
+    const result = spawnSync("bash", ["-c", 'command -v "$1"', "--", command], { encoding: "utf8" });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, `${command} is required for setup tests`);
+    await symlink(result.stdout.trim(), join(bin, command));
+  }
   const mock = [
     "#!/usr/bin/env node",
     'const fs = require("node:fs");',
@@ -36,11 +45,12 @@ async function fixture(t) {
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
   for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "custom codex $'quoted"]) {
+    if (missingBinaries.includes(file)) continue;
     await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = {
     ...process.env,
-    PATH: bin + delimiter + process.env.PATH,
+    PATH: bin,
     DUAL_AGENT_TEST_HOME: testHome,
     DUAL_AGENT_TEST_LOG: log,
   };
@@ -49,13 +59,15 @@ async function fixture(t) {
   delete env.DUAL_AGENT_TEST_FAIL_CLAUDE;
   return {
     dir, testHome, customBinary, env,
-    async run(args, input, overrides = {}) {
+    async run(args, input, overrides = {}, expectedStatus = 0) {
       const result = spawnSync("bash", [join(dir, "setup.sh"), ...args], {
         cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
       });
       assert.ifError(result.error);
-      assert.equal(result.status, 0, result.stdout + result.stderr);
-      return (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+      const output = result.stdout + result.stderr;
+      assert.equal(result.status, expectedStatus, output);
+      const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      return { calls, output };
     },
   };
 }
@@ -84,7 +96,7 @@ function runNode(code, env) {
 
 test("persists CODEX_BIN for a fresh delegate process", async (t) => {
   const f = await fixture(t);
-  const calls = await f.run([], "2c", { CODEX_BIN: f.customBinary });
+  const { calls } = await f.run([], "2c", { CODEX_BIN: f.customBinary });
   const saved = registrationEnv(calls, "claude");
   assert.equal(saved.CODEX_BIN, f.customBinary);
   const result = runNode(
@@ -104,6 +116,37 @@ test("persists CODEX_BIN in the JSON fallback", async (t) => {
   assert.equal(config.mcpServers["codex-delegate"].env.CODEX_BIN, f.customBinary);
 });
 
+test("warns and registers codex when codex-pool is unavailable", async (t) => {
+  const f = await fixture(t, ["codex-pool"]);
+  const { calls, output } = await f.run([], "2c");
+  assert.match(output, /\[WARN\].*codex-pool.*falling back to codex/);
+  assert.doesNotMatch(output, /\[MISSING\]/);
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex");
+});
+
+test("persists the codex fallback when CLI registration fails", async (t) => {
+  const f = await fixture(t, ["codex-pool"]);
+  await f.run([], "2c", { DUAL_AGENT_TEST_FAIL_CLAUDE: "1" });
+  const config = JSON.parse(await readFile(join(f.testHome, ".claude.json"), "utf8"));
+  assert.equal(config.unrelated, true);
+  assert.equal(config.mcpServers["codex-delegate"].env.CODEX_BIN, "codex");
+});
+
+test("fails dependency checks when neither Codex binary is available", async (t) => {
+  const f = await fixture(t, ["codex-pool", "codex"]);
+  const { calls, output } = await f.run([], "2c", {}, 1);
+  assert.match(output, /\[MISSING\].*codex/);
+  assert.deepEqual(calls, []);
+});
+
+test("does not replace an unavailable custom CODEX_BIN", async (t) => {
+  const f = await fixture(t);
+  const { calls, output } = await f.run([], "2c", { CODEX_BIN: "missing-custom-codex" }, 1);
+  assert.match(output, /\[MISSING\].*missing-custom-codex/);
+  assert.doesNotMatch(output, /falling back/);
+  assert.deepEqual(calls, []);
+});
+
 test("passes a custom CODEX_HOME to a fresh worker process", async (t) => {
   const f = await fixture(t);
   const configDir = join(f.dir, "custom codex config");
@@ -113,7 +156,7 @@ test("passes a custom CODEX_HOME to a fresh worker process", async (t) => {
     'model_reasoning_effort = "low"',
     'service_tier = "ultrafast"',
   ].join("\n"));
-  const calls = await f.run(["--pro-worker"], "", { CODEX_HOME: configDir });
+  const { calls } = await f.run(["--pro-worker"], "", { CODEX_HOME: configDir });
   const saved = registrationEnv(calls, "codex");
   assert.equal(saved.CODEX_HOME, configDir);
   const settings = runNode(
@@ -129,7 +172,8 @@ test("passes a custom CODEX_HOME to a fresh worker process", async (t) => {
 
 test("registers explicit defaults when overrides are unset", async (t) => {
   const f = await fixture(t);
-  const calls = await f.run([], "25c");
+  const { calls, output } = await f.run([], "25c");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.doesNotMatch(output, /falling back/);
 });
