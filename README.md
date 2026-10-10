@@ -1,10 +1,10 @@
 # Dual Agent Development Environment
 
-A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** (OpenAI, GPT-5.5) and **ChatGPT Pro** (GPT-5.5 Pro), enabling you to leverage the strengths of multiple AI models.
+A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** and **ChatGPT Pro** (OpenAI), enabling you to leverage the strengths of multiple AI models. Both OpenAI sides use the model, reasoning effort, and speed set in `~/.codex/config.toml`.
 
 ## Why Multiple Agents?
 
-| Claude Code (Primary) | Codex CLI (GPT-5.5) | ChatGPT Pro (GPT-5.5 Pro) |
+| Claude Code (Primary) | Codex CLI | ChatGPT Pro |
 |-----------------------|-----------|----------------------|
 | Fast iteration & prototyping | Deep, thorough code review | Extended thinking for complex analysis |
 | Planning & orchestration | Complex algorithm implementation | Maximum context for large codebases |
@@ -90,7 +90,7 @@ This opens a split tmux session with Claude (left) and Codex (right).
 
 ### Option 3: ChatGPT Code Review (Chrome)
 
-Use GPT-5.5 Pro via Claude Code's Chrome integration for deep, extended-thinking code reviews:
+Use ChatGPT via Claude Code's Chrome integration for deep, extended-thinking code reviews, with the model settings from `~/.codex/config.toml`:
 
 ```bash
 # Start Claude Code with Chrome integration
@@ -102,7 +102,7 @@ Then ask naturally:
 ```
 You: Review src/auth.ts with ChatGPT
 
-You: Get GPT-5.5 Pro to review this migration plan
+You: Get ChatGPT to review this migration plan
 ```
 
 **Prerequisites:**
@@ -111,15 +111,15 @@ You: Get GPT-5.5 Pro to review this migration plan
 - Logged into chat.com with ChatGPT Pro subscription
 
 **Workflow:**
-1. Claude submits the code review request to GPT-5.5 Pro
-2. Returns immediately (non-blocking) - GPT-5.5 Pro can take 5-30 minutes
+1. Claude submits the code review request to ChatGPT
+2. Returns immediately (non-blocking) - high-effort reviews can take 5-30 minutes
 3. Ask Claude to "fetch ChatGPT results" when ready
 
 **Skill:** `/chatgpt-code-review`
 
 ### Option 4: ChatGPT Pro Worker for Codex
 
-Use GPT-5.5 Pro as an external worker for arbitrary Codex tasks: implementation, debugging, refactoring, planning, review, or custom analysis. The worker can automate ChatGPT through Playwright using a persistent Chromium profile.
+Use ChatGPT as an external worker for arbitrary Codex tasks: implementation, debugging, refactoring, planning, review, or custom analysis. The worker can automate ChatGPT through Playwright using a persistent Chromium profile.
 
 Install only this component:
 
@@ -132,12 +132,12 @@ Then restart Codex and ask:
 ```
 $chatgpt-pro-worker implement rate limiting for the API and return an apply-ready patch
 
-$chatgpt-pro-worker debug this failing test and ask GPT-5.5 Pro for a unified diff
+$chatgpt-pro-worker debug this failing test and ask ChatGPT for a unified diff
 ```
 
 **Workflow:**
 1. Codex gathers repo context and calls the `chatgpt-pro-worker` MCP server.
-2. The MCP server opens ChatGPT in Playwright Chromium, selects GPT-5.5 Pro when possible, submits the prompt, waits for the answer, and saves the response.
+2. The MCP server opens ChatGPT in Playwright Chromium, selects the model, reasoning effort, and speed from `~/.codex/config.toml` (`model`, `model_reasoning_effort`, `service_tier`) when ChatGPT offers them, submits the prompt, waits for the answer, and saves the response.
 3. Codex reads the saved result, applies patches when appropriate, and runs verification.
 
 **Login bootstrap:**
@@ -271,12 +271,12 @@ Claude: Codex completed the review. Here are the findings:
  |    codex-delegate     |  |    .agent-collab/     |  |     Chrome + chat.com     |
  |      MCP Server       |  |   (file-based IPC)    |  |   (browser automation)    |
  |                       |  |                       |  |                           |
- |   Spawns codex CLI    |  |   requests/task.md    |  |   JavaScript injection    |
+ |   Spawns codex-pool   |  |   requests/task.md    |  |   JavaScript injection    |
  +-----------+-----------+  +-----------+-----------+  +-------------+-------------+
              |                          |                            |
              v                          v                            v
  +-----------+--------------------------+-----------+  +-------------+-------------+
- |                Codex CLI (GPT-5.5)               |  |       GPT-5.5 Pro        |
+ |                    Codex CLI                     |  |        ChatGPT Pro        |
  |                                                  |  |                           |
  |        Deep code review & Implementation         |  | Extended thinking (5-30m) |
  |         Security analysis & Plan review          |  | Maximum context + analysis |
@@ -371,6 +371,9 @@ echo "idle" > .agent-collab/status
 ```bash
 # Verify codex is installed and authenticated
 codex "hello"
+
+# MCP tools run codex-pool (or $CODEX_BIN)
+codex-pool exec "hello"
 ```
 
 ---

@@ -3,6 +3,8 @@
  */
 import { spawn } from "child_process";
 import { writeFile } from "fs/promises";
+// Codex binary to run (the pooled Codex build by default)
+const CODEX_BIN = process.env.CODEX_BIN || "codex-pool";
 // Color codes
 const colors = {
     reset: "\x1b[0m",
@@ -103,8 +105,8 @@ export async function runCodex(task, options = {}) {
     return new Promise((resolve) => {
         const chunks = [];
         let lineCount = 0;
-        // Spawn codex with full-auto mode
-        const proc = spawn("codex", ["exec", "--full-auto", prompt], {
+        // Spawn codex non-interactively; --approve-for-me replaced --full-auto
+        const proc = spawn(CODEX_BIN, ["exec", "--approve-for-me", prompt], {
             cwd,
             stdio: ["ignore", "pipe", "pipe"],
             env: { ...process.env, FORCE_COLOR: "0" },

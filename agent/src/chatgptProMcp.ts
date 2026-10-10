@@ -20,6 +20,12 @@ import { homedir, platform } from "os";
 import { join } from "path";
 import { spawn } from "child_process";
 import { chromium, type BrowserContext, type Page } from "playwright";
+import {
+  applyChatGptSettings,
+  describeSettings,
+  loadChatGptSettings,
+  type ChatGptSettings,
+} from "./chatgptSettings.js";
 
 type ProTaskStatus = "submitted" | "running" | "complete" | "failed";
 
@@ -42,7 +48,6 @@ interface ProTaskMeta {
   error?: string;
 }
 
-const DEFAULT_MODEL = "GPT-5.5 Pro";
 const DEFAULT_TASK_DIR =
   process.env.CHATGPT_PRO_TASK_DIR ||
   join(homedir(), ".codex", "chatgpt-pro-worker");
@@ -103,7 +108,7 @@ const TOOLS = [
   {
     name: "submit_pro_task",
     description:
-      "Prepare or run an arbitrary coding task with ChatGPT GPT-5.5 Pro. In automated mode, submits through Playwright and saves the response.",
+      "Prepare or run an arbitrary coding task in ChatGPT, selecting the model, reasoning effort, and speed from ~/.codex/config.toml unless overridden. In automated mode, submits through Playwright and saves the response.",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -132,7 +137,18 @@ const TOOLS = [
         },
         model: {
           type: "string",
-          description: "ChatGPT model to ask the user to select. Default: GPT-5.5 Pro.",
+          description:
+            "Model to select, as a Codex slug (gpt-6-astra) or ChatGPT label. Default: `model` from ~/.codex/config.toml.",
+        },
+        reasoning_effort: {
+          type: "string",
+          description:
+            "Reasoning effort to select (low, medium, high, xhigh, max, ultra). Default: `model_reasoning_effort` from ~/.codex/config.toml.",
+        },
+        service_tier: {
+          type: "string",
+          description:
+            "Speed to select (default, fast, ultrafast). Default: `service_tier` from ~/.codex/config.toml.",
         },
         open_browser: {
           type: "boolean",
@@ -518,34 +534,6 @@ async function isLoggedIn(page: Page): Promise<boolean> {
   return false;
 }
 
-async function selectModel(page: Page, model: string): Promise<string> {
-  const candidates = [
-    "button[data-testid='model-switcher-dropdown-button']",
-    "button[aria-label*='model' i]",
-    "button:has-text('GPT')",
-  ];
-
-  for (const selector of candidates) {
-    const button = page.locator(selector).first();
-    try {
-      await button.waitFor({ state: "visible", timeout: 2500 });
-      await button.click();
-      const modelOption = page.getByText(model, { exact: false }).first();
-      await modelOption.waitFor({ state: "visible", timeout: 4000 });
-      await modelOption.click();
-      return `selected ${model}`;
-    } catch {
-      try {
-        await page.keyboard.press("Escape");
-      } catch {
-        // Ignore.
-      }
-    }
-  }
-
-  return `could not confirm model selection; continuing with current ChatGPT model`;
-}
-
 async function fillComposer(page: Page, prompt: string): Promise<void> {
   const composer = await findComposer(page);
   if (!composer) {
@@ -698,7 +686,7 @@ Complete login in the opened browser and keep the session signed in. After login
 async function runAutomatedProTask(params: {
   meta: ProTaskMeta;
   prompt: string;
-  model: string;
+  settings: ChatGptSettings;
   headless: boolean;
   timeoutMs: number;
 }): Promise<ProTaskMeta> {
@@ -727,7 +715,11 @@ async function runAutomatedProTask(params: {
       );
     }
 
-    const modelStatus = await selectModel(page, params.model);
+    const modelStatus = await applyChatGptSettings(
+      page,
+      params.settings,
+      join(jobDir(params.meta.id), "model-picker.png")
+    );
     await fillComposer(page, params.prompt);
     await clickSend(page);
     const response = await waitForAssistantResponse(page, params.timeoutMs);
@@ -766,7 +758,12 @@ async function submitProTask(args: Record<string, unknown>): Promise<string> {
   const expectedOutput =
     argString(args, "expected_output", taskType === "implement" ? "unified_diff" : "custom") ||
     "custom";
-  const model = argString(args, "model", DEFAULT_MODEL) || DEFAULT_MODEL;
+  const settings = await loadChatGptSettings({
+    model: argString(args, "model"),
+    reasoningEffort: argString(args, "reasoning_effort"),
+    serviceTier: argString(args, "service_tier"),
+  });
+  const model = describeSettings(settings);
   const title =
     argString(args, "title") ||
     task
@@ -790,7 +787,7 @@ async function submitProTask(args: Record<string, unknown>): Promise<string> {
     context,
     taskType,
     expectedOutput,
-    model,
+    model: settings.model?.label ?? "ChatGPT",
   });
 
   const promptFile = join(dir, "prompt.md");
@@ -824,7 +821,7 @@ async function submitProTask(args: Record<string, unknown>): Promise<string> {
     const run = runAutomatedProTask({
       meta,
       prompt,
-      model,
+      settings,
       headless,
       timeoutMs,
     });
@@ -884,7 +881,7 @@ Browser: ${browserStatus}
 Automation: manual fallback
 
 Next steps:
-1. In ChatGPT, select **${model}**.
+1. In ChatGPT, select ${model}.
 2. Paste the clipboard contents into the prompt box.
 3. Submit the task.
 4. When ChatGPT finishes, paste the full response back to Codex and call \`save_pro_result\` with this job id.

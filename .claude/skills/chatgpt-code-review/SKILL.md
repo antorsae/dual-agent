@@ -1,11 +1,11 @@
 ---
 name: chatgpt-code-review
-description: Review code using GPT-5.5 Pro via Claude Code's Chrome integration. Use when the user asks to review code with ChatGPT, use their ChatGPT Pro subscription, get GPT-5.5 Pro to review code, or wants a second opinion from GPT. Requires Claude Code running with --chrome flag and user logged into chat.com. Triggers on "review with ChatGPT", "ChatGPT Pro review", "GPT-5.5 Pro code review", "get GPT's opinion".
+description: Review code using ChatGPT via Claude Code's Chrome integration, with the model, reasoning effort, and speed from ~/.codex/config.toml. Use when the user asks to review code with ChatGPT, use their ChatGPT Pro subscription, or wants a second opinion from GPT. Requires Claude Code running with --chrome flag and user logged into chat.com. Triggers on "review with ChatGPT", "ChatGPT Pro review", "GPT code review", "get GPT's opinion".
 ---
 
 # ChatGPT Code Review via Chrome
 
-Review code using GPT-5.5 Pro through Claude Code's Chrome browser integration.
+Review code using ChatGPT through Claude Code's Chrome browser integration, with the same model settings Codex uses.
 
 ---
 
@@ -22,7 +22,7 @@ Inject the complete code into ChatGPT's prompt using JavaScript with JSON encodi
 1. Claude Code with Chrome integration: `claude --chrome`
 2. Claude in Chrome extension installed (v1.0.36+)
 3. User logged into chat.com in Chrome
-4. ChatGPT Pro subscription (for GPT-5.5 Pro access)
+4. A ChatGPT plan that offers the model configured in `~/.codex/config.toml`
 
 ---
 
@@ -42,10 +42,12 @@ content = Read(file.cpp)  // Get ALL content
 2. Wait for page load
 3. Verify logged in
 
-### Step 3: Select GPT-5.5 Pro
+### Step 3: Select the Codex Model Settings
 
-1. Click model selector dropdown
-2. Select **"GPT-5.5 Pro"**
+1. Read `model`, `model_reasoning_effort`, and `service_tier` from `~/.codex/config.toml` (`$CODEX_HOME/config.toml` if set). Skip any that are unset.
+2. Look up the model's `display_name` in `~/.codex/models_cache.json` (`models[].slug`). ChatGPT may show a shorter name, e.g. "Astra" for `gpt-6-astra`.
+3. Open the model picker and select the model, then the reasoning level (`low` = Light, `xhigh` = Extra High, `max` = Max, `ultra` = Ultra), then the speed (`fast` = Fast, `ultrafast` = Ultrafast). If the picker only shows a Power slider, open **Advanced**.
+4. If ChatGPT doesn't offer a setting, keep its current value and tell the user which settings were used.
 
 ### Step 4: Build and Execute JavaScript
 
@@ -95,7 +97,7 @@ The `\n` inside the JSON string is correct - `JSON.parse()` converts them to rea
 2. Verify message was sent
 3. Return immediately - do NOT wait for completion
 
-> "Submitted to GPT-5.5 Pro. This typically takes 5-30 minutes.
+> "Submitted to ChatGPT (<model>, <reasoning>). High-effort reviews can take 5-30 minutes.
 > Ask me to 'fetch ChatGPT results' when ready."
 
 ### Step 6: Fetch Results (on user request)
@@ -112,10 +114,10 @@ The `\n` inside the JSON string is correct - `JSON.parse()` converts them to rea
 |-------|--------|
 | Code appears as single line | You did NOT use JSON.parse(). Re-read Step 4. |
 | Not logged in | Ask user to log in |
-| Model unavailable | Fall back to GPT-5.5 Thinking |
+| Configured model or setting not offered | Keep ChatGPT's current choice and tell the user what was used |
 
 ---
 
 ## Non-Blocking Workflow
 
-GPT-5.5 Pro takes 5-30+ minutes. Submit and return immediately. Fetch results when user asks.
+High-effort reasoning can take 5-30+ minutes. Submit and return immediately. Fetch results when user asks.

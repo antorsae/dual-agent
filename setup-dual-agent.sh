@@ -188,9 +188,14 @@ if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     check_install node "Install from: https://nodejs.org" || MISSING=1
 fi
 
-# codex is needed for MCP delegation, tmux skills, and the ChatGPT Pro worker
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
+# codex is needed for tmux skills and the ChatGPT Pro worker
+if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
+fi
+
+# MCP delegation runs codex-pool (override with CODEX_BIN)
+if [ "$INSTALL_MCP" -eq 1 ]; then
+    check_install "${CODEX_BIN:-codex-pool}" "Put it on PATH, or set CODEX_BIN to another Codex binary" || MISSING=1
 fi
 
 # jq is needed for JSON config manipulation (MCP fallback + skills settings)
@@ -305,8 +310,9 @@ if [ "$INSTALL_MCP" -eq 1 ]; then
         echo -e "${YELLOW}Configuring MCP server...${NC}"
         # Remove existing server first (ignore errors if it doesn't exist)
         claude mcp remove codex-delegate --scope user 2>/dev/null || true
-        # Add the MCP server globally
-        if claude mcp add --scope user codex-delegate -- node "$MCP_SERVER_PATH" 2>/dev/null; then
+        # Persist the executable override for later Claude sessions.
+        DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
+        if claude mcp add --scope user codex-delegate --env "CODEX_BIN=$DELEGATE_CODEX_BIN" -- node "$MCP_SERVER_PATH" 2>/dev/null; then
             echo -e "  ${GREEN}[OK]${NC} Added codex-delegate MCP server (global)"
         else
             echo -e "  ${YELLOW}[WARN]${NC} Failed to add MCP server via CLI, trying manual config..."
@@ -314,12 +320,12 @@ if [ "$INSTALL_MCP" -eq 1 ]; then
             CLAUDE_JSON="$HOME/.claude.json"
             if [ -f "$CLAUDE_JSON" ]; then
                 EXISTING=$(cat "$CLAUDE_JSON")
-                UPDATED=$(echo "$EXISTING" | jq --arg path "$MCP_SERVER_PATH" '
+                UPDATED=$(echo "$EXISTING" | jq --arg path "$MCP_SERVER_PATH" --arg codex_bin "$DELEGATE_CODEX_BIN" '
                     .mcpServers["codex-delegate"] = {
                         "type": "stdio",
                         "command": "node",
                         "args": [$path],
-                        "env": {}
+                        "env": {"CODEX_BIN": $codex_bin}
                     }
                 ')
                 echo "$UPDATED" > "$CLAUDE_JSON"
@@ -333,12 +339,14 @@ if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
     PRO_MCP_SERVER_PATH="$AGENT_DIR/dist/chatgptProMcp.js"
     if [ -f "$PRO_MCP_SERVER_PATH" ]; then
         echo -e "${YELLOW}Configuring ChatGPT Pro worker MCP for Codex...${NC}"
+        # Codex filters the environment inherited by MCP servers.
+        PRO_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
         codex mcp remove chatgpt-pro-worker 2>/dev/null || true
-        if codex mcp add chatgpt-pro-worker -- node "$PRO_MCP_SERVER_PATH" 2>/dev/null; then
+        if codex mcp add chatgpt-pro-worker --env "CODEX_HOME=$PRO_CODEX_HOME" -- node "$PRO_MCP_SERVER_PATH" 2>/dev/null; then
             echo -e "  ${GREEN}[OK]${NC} Added chatgpt-pro-worker MCP server to Codex"
         else
             echo -e "  ${RED}[WARN]${NC} Failed to add chatgpt-pro-worker MCP server via codex CLI"
-            echo -e "           Run manually: ${BLUE}codex mcp add chatgpt-pro-worker -- node \"$PRO_MCP_SERVER_PATH\"${NC}"
+            echo -e "           Run manually: ${BLUE}codex mcp add chatgpt-pro-worker --env \"CODEX_HOME=$PRO_CODEX_HOME\" -- node \"$PRO_MCP_SERVER_PATH\"${NC}"
         fi
     else
         echo -e "  ${YELLOW}[SKIP]${NC} ChatGPT Pro worker MCP build output not found"
