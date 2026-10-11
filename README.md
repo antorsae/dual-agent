@@ -78,6 +78,13 @@ For interactive side-by-side work with both agents visible:
 
 This opens a split tmux session with Claude (left) and Codex (right).
 
+Chrome integration and `/chatgpt-code-review` are enabled in the launcher only
+when selected during setup (component 4). Selecting only the tmux skills
+(component 3) disables Chrome for future launches, even if the Chrome skill was
+installed previously. The choice is saved in
+`${XDG_CONFIG_HOME:-~/.config}/dual-agent/chrome-enabled`; without a saved choice,
+Chrome defaults to off. To enable it, rerun setup and select components 3 and 4.
+
 **Skills:**
 
 | Claude Skills | Codex Skills |

@@ -22,13 +22,15 @@ async function fixture(t, missingBinaries = []) {
   const source = await readFile(new URL("../../setup-dual-agent.sh", import.meta.url), "utf8");
   // Redirect installer-managed files in a copy, without changing process HOME.
   await writeFile(join(dir, "setup.sh"), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
+  const launcher = await readFile(new URL("../../start-dual-agent.sh", import.meta.url), "utf8");
+  await writeFile(join(dir, "start-dual-agent.sh"), launcher.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
   await writeFile(join(dir, "agent", "dist", "mcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "chatgptProMcp.js"), "");
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
   await writeFile(log, "");
   // Isolate PATH so missing-binary tests cannot find a real Codex installation.
   await symlink(process.execPath, join(bin, "node"));
-  for (const command of ["bash", "dirname", "cat", "jq", "mkdir"]) {
+  for (const command of ["bash", "dirname", "cat", "jq", "mkdir", "awk", "sed", "chmod", "basename", "cp"]) {
     const result = spawnSync("bash", ["-c", 'command -v "$1"', "--", command], { encoding: "utf8" });
     assert.ifError(result.error);
     assert.equal(result.status, 0, `${command} is required for setup tests`);
@@ -41,10 +43,12 @@ async function fixture(t, missingBinaries = []) {
     "const args = process.argv.slice(2);",
     'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args }) + "\\n");',
     'if (name === "claude" && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_CLAUDE === "1") process.exit(1);',
+    'if (name === "tmux" && args[0] === "-V") process.stdout.write("tmux 3.6a\\n");',
+    'if (name === "tmux" && args[0] === "has-session") process.exit(1);',
     'if (name.startsWith("custom codex")) process.stdout.write("custom executable");',
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
-  for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "custom codex $'quoted"]) {
+  for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "tmux", "custom codex $'quoted"]) {
     if (missingBinaries.includes(file)) continue;
     await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
@@ -56,6 +60,7 @@ async function fixture(t, missingBinaries = []) {
   };
   delete env.CODEX_BIN;
   delete env.CODEX_HOME;
+  delete env.XDG_CONFIG_HOME;
   delete env.DUAL_AGENT_TEST_FAIL_CLAUDE;
   return {
     dir, testHome, customBinary, env,
@@ -69,7 +74,31 @@ async function fixture(t, missingBinaries = []) {
       const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
       return { calls, output };
     },
+    async launch(overrides = {}, projectDir = dir) {
+      await writeFile(log, "");
+      const result = spawnSync("bash", [join(dir, "start-dual-agent.sh"), "test-session", projectDir], {
+        cwd: dir, env: { ...env, ...overrides }, encoding: "utf8", timeout: 15000,
+      });
+      assert.ifError(result.error);
+      const output = result.stdout + result.stderr;
+      assert.equal(result.status, 0, output);
+      const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      return { calls, output };
+    },
   };
+}
+
+function assertChromeLaunch({ calls, output }, enabled) {
+  const commands = calls
+    .filter((call) => call.name === "tmux" && call.args[0] === "send-keys" && call.args[2] === "test-session:0.0")
+    .map((call) => call.args[3]);
+  assert.deepEqual(commands.filter((command) => /^claude(?: |$)/.test(command)), [enabled ? "claude --chrome" : "claude --no-chrome"]);
+  const banner = commands.find((command) => command.startsWith("echo 'Skills:"));
+  assert.ok(banner, "expected Claude pane skills banner");
+  assert.equal(banner.includes("/chatgpt-code-review"), enabled);
+  const summary = output.split("\n").find((line) => line.startsWith("Claude Skills:"));
+  assert.ok(summary, "expected launcher skills summary");
+  assert.equal(summary.includes("/chatgpt-code-review"), enabled);
 }
 
 function registrationEnv(calls, name) {
@@ -176,4 +205,46 @@ test("registers explicit defaults when overrides are unset", async (t) => {
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
   assert.doesNotMatch(output, /falling back/);
+});
+
+test("launches without Chrome when no setup preference exists", async (t) => {
+  const f = await fixture(t);
+  assertChromeLaunch(await f.launch(), false);
+});
+
+test("tmux-only setup launches without Chrome", async (t) => {
+  const f = await fixture(t);
+  await f.run([], "3c");
+  assertChromeLaunch(await f.launch(), false);
+});
+
+test("launcher follows setup selection even when a previous Chrome skill remains installed", async (t) => {
+  const f = await fixture(t);
+  const skillDir = join(f.dir, ".claude", "skills", "chatgpt-code-review");
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), "Chrome review fixture");
+
+  await f.run([], "34c");
+  assertChromeLaunch(await f.launch(), true);
+
+  await f.run([], "3c");
+  assert.equal(await readFile(join(f.testHome, ".claude", "skills", "chatgpt-code-review", "SKILL.md"), "utf8"), "Chrome review fixture");
+  assertChromeLaunch(await f.launch(), false);
+});
+
+test("Chrome-only setup applies to other projects and honors XDG_CONFIG_HOME", async (t) => {
+  const f = await fixture(t);
+  const env = { XDG_CONFIG_HOME: join(f.dir, "custom config") };
+  const projectDir = join(f.dir, "another project");
+  await mkdir(projectDir);
+  await f.run([], "4c", env);
+  assertChromeLaunch(await f.launch(env, projectDir), true);
+  assertChromeLaunch(await f.launch({}, projectDir), false);
+});
+
+test("installing only the Pro worker preserves the Chrome launch preference", async (t) => {
+  const f = await fixture(t);
+  await f.run([], "34c");
+  await f.run(["--pro-worker"], "");
+  assertChromeLaunch(await f.launch(), true);
 });

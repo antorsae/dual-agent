@@ -128,7 +128,19 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} Claude settings file not found or jq not available"
 fi
 
-# 5. Remove .agent-collab directory
+# 5. Remove the saved launcher preference
+echo -e "${YELLOW}Removing launcher preferences...${NC}"
+DUAL_AGENT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dual-agent"
+if [ -f "$DUAL_AGENT_CONFIG_DIR/chrome-enabled" ]; then
+    rm -f "$DUAL_AGENT_CONFIG_DIR/chrome-enabled"
+    rmdir "$DUAL_AGENT_CONFIG_DIR" 2>/dev/null || true
+    echo -e "  ${GREEN}[OK]${NC} Removed tmux Chrome preference"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} No saved launcher preferences"
+fi
+
+# 6. Remove .agent-collab directory
 echo -e "${YELLOW}Removing .agent-collab directory...${NC}"
 if [ -d "$SCRIPT_DIR/.agent-collab" ]; then
     rm -rf "$SCRIPT_DIR/.agent-collab"
@@ -138,7 +150,7 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} .agent-collab/ not found"
 fi
 
-# 6. Remove .agent-collab from .gitignore
+# 7. Remove .agent-collab from .gitignore
 echo -e "${YELLOW}Cleaning .gitignore...${NC}"
 GITIGNORE="$SCRIPT_DIR/.gitignore"
 if [ -f "$GITIGNORE" ] && grep -q ".agent-collab" "$GITIGNORE"; then

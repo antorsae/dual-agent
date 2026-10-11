@@ -49,6 +49,8 @@ npm install
 npm run build
 ```
 
+Dependencies (`node_modules/`) and compiled output (`dist/`) are generated locally and ignored by Git. The repository setup script also installs and builds them automatically.
+
 Run `npm test` for the picker and installer regression checks. These require Playwright Chromium (`npx playwright install chromium`), Bash, and jq; they use local fixtures and do not change your MCP registrations.
 
 ### Configure Claude Code

@@ -582,6 +582,19 @@ EOF
     fi
 fi
 
+# Save the Chrome choice for future tmux sessions. Unrelated component installs
+# leave the existing launch preference unchanged.
+if [ "$INSTALL_SKILLS" -eq 1 ] || [ "$INSTALL_CHATGPT" -eq 1 ]; then
+    DUAL_AGENT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dual-agent"
+    mkdir -p "$DUAL_AGENT_CONFIG_DIR"
+    printf '%s\n' "$INSTALL_CHATGPT" > "$DUAL_AGENT_CONFIG_DIR/chrome-enabled"
+    if [ "$INSTALL_CHATGPT" -eq 1 ]; then
+        echo -e "  ${GREEN}[OK]${NC} Chrome integration enabled for tmux launches"
+    else
+        echo -e "  ${GREEN}[OK]${NC} Chrome integration disabled for tmux launches"
+    fi
+fi
+
 echo ""
 
 # Make start script executable (only needed for tmux skills)
