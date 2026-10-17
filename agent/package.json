@@ -17,7 +17,7 @@
     "dev": "tsx src/cli.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "playwright": "^1.61.0",
     "smol-toml": "^1.9.0"
   },
