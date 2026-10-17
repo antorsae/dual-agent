@@ -56,7 +56,11 @@ Each worker uses its own CLI authentication and model configuration. The Claude 
 
 Delegation inputs are `prompt` (or `plan` for plan review), `cwd`, optional `files`, optional `mode`, `wait`, and `timeout_ms`. `files` accepts an array or a comma-separated string.
 
-`cwd` must be an absolute project directory. The Claude host can supply it through `CLAUDE_PROJECT_DIR` when omitted. Codex callers should pass it explicitly. Both the canonical project path and the workspace used for locking are returned with the job.
+`cwd` is optional. When omitted, the server uses `CLAUDE_PROJECT_DIR` if set,
+otherwise the directory where the host launched the MCP server. Pass an absolute
+`cwd` to target another project or if the host changes projects after launch.
+Both the canonical project path and the workspace used for locking are returned
+with the job.
 
 Review, plan-review, and custom tasks default to **read-only**. Implementation defaults to **edit**. A custom editing task must explicitly select `mode: "edit"`.
 
@@ -71,7 +75,17 @@ Review, plan-review, and custom tasks default to **read-only**. Implementation d
 
 ## Results, waiting, and cancellation
 
-A call returns a persistent task ID immediately by default. Continue with the corresponding status tool:
+A call returns a persistent task ID immediately by default. For automatic Codex
+completion events in Claude Code, start an interactive session with:
+
+```bash
+claude --dangerously-load-development-channels server:codex-delegate
+```
+
+Claude can then do independent work and fetch the saved result when the event
+arrives. See [channel setup and requirements](agent/README.md#completion-notifications-channels).
+Without an enabled channel, including when Codex delegates to Claude, continue
+with the corresponding status tool:
 
 ```json
 {
@@ -80,7 +94,7 @@ A call returns a persistent task ID immediately by default. Continue with the co
 }
 ```
 
-The status call waits up to 30 seconds, returning sooner when the job finishes. This works within ordinary MCP request timeouts and avoids rapid polling. `wait: true` on the original delegation call is also available for short tasks; long tasks should use background submission and bounded status waits.
+The status call waits up to 30 seconds, returning sooner when the job finishes. This works within ordinary MCP request timeouts and avoids rapid polling. `wait: true` on the original delegation call is also available for short tasks; long tasks should use background submission with channel events or bounded status waits. Desktop notifications remain available in both directions.
 
 Tasks time out after two hours by default. `timeout_ms` overrides this. The cancel tool accepts `task_id` and can request cancellation from another live instance of the same provider's server. Cancellation stops the worker process group and retains diagnostics.
 
@@ -93,6 +107,11 @@ Each job saves `job.json`, `result.md`, `stdout.log`, and `stderr.log`. Complete
 Only one delegated editing job can own a workspace at a time, across both providers and server instances. Git projects lock the worktree root, so subdirectories and symlink aliases share the same lock. Non-Git projects lock the specified canonical directory.
 
 A conflicting edit is rejected with the active task ID. The host agent should also stop editing that workspace while its worker edits it. The lock cannot prevent changes by an unrelated editor. Use a separate Git worktree explicitly when parallel editing is necessary.
+
+Codex workers accept the project directory selected by the host, including
+directories outside Git repositories. They do not require a second Git-directory
+check. This shares the host's directory choice; each CLI still applies its own
+tool permissions and project-configuration trust rules.
 
 Codex reviews run in its read-only sandbox with approval escalation disabled. Claude reviews receive only `Read`, `Glob`, and `Grep` tools. Claude edits use automatic permission review; unavailable permissions or denied tool calls produce a failed job with the available result for inspection. Claude's read-only mode is a tool restriction, not an additional operating-system sandbox around its startup hooks or extensions.
 

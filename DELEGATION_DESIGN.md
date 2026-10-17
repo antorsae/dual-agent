@@ -10,9 +10,23 @@ Both MCP directions share one job manager and local state store. The host suppli
 4. Save stdout/stderr separately. Capture Codex's final-message file or parse Claude's JSON answer and session ID.
 5. Stop remaining worker descendants, atomically save the final status/result, and release the edit lock after cleanup is confirmed.
 
+Project selection uses explicit `cwd`, then `CLAUDE_PROJECT_DIR`, then the
+server's inherited working directory. This lets a host omit `cwd` for its
+current project while retaining an absolute-path override for other projects.
+The fallback follows the server's launch directory, not later host directory
+changes. All paths still pass through validation and canonicalization.
+
 `jobs/<uuid>/job.json` stores the provider, task, paths, mode, timestamps, owner, worker identity, status, and error. Result and log files live alongside it. The root defaults to `~/.local/state/dual-agent`, honors `XDG_STATE_HOME`, and can be overridden with `DUAL_AGENT_STATE_DIR`. Both host registrations use the same absolute root.
 
 The original call returns a job ID by default. Status calls can wait up to 30 seconds, avoiding dependence on unusually long MCP request timeouts. Jobs continue while their server is alive; completed results are accessible after restart. A large result is returned as an excerpt with the complete file path.
+
+The Codex MCP server also emits Claude Code channel events from the job manager's
+completion callback, after finalizing job state. Events include the job ID, type,
+terminal status, and duration; the host retrieves the full result through the
+status tool. Claude must explicitly enable the channel for the current session.
+The reverse server continues to use bounded status waits. Desktop notifications
+remain independent of channel delivery. Events are best effort and are not
+persisted or replayed, so reconnecting hosts recover results through status/list.
 
 ## Cancellation and interruption
 
@@ -35,6 +49,11 @@ The orchestrating agent must also avoid writing to the same workspace during a d
 ## Execution modes
 
 Review, plan-review, and custom tasks default to `read-only`. Implementations default to `edit`; callers can explicitly set `mode`.
+
+The caller authorizes the project directory. Codex workers pass
+`--skip-git-repo-check` so this decision also works outside Git repositories.
+The override is per invocation and does not update global project trust or
+translate permissions between Claude and Codex.
 
 Codex uses its read-only sandbox with approval escalation disabled for read-only tasks, and automatic approval review for editing. Claude exposes only file-reading tools in read-only mode, and file editing/Bash tools under automatic permission review for editing. Claude's tool restriction does not add an OS sandbox around CLI startup customizations. Permission denials are reported as a failed job, preserving the answer and logs for inspection.
 

@@ -41,18 +41,22 @@ async function fixture(t) {
     }
     await rm(root, { recursive: true, force: true });
   });
-  async function connect(provider = "codex", overrides = {}) {
+  async function connect(provider = "codex", overrides = {}, cwd = root) {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [fileURLToPath(new URL(provider === "codex" ? "../dist/mcp.js" : "../dist/claudeMcp.js", import.meta.url))],
-      cwd: root, env: { ...env, ...overrides }, stderr: "pipe",
+      cwd, env: { ...env, ...overrides }, stderr: "pipe",
     });
     transport.stderr?.on("data", () => {});
     const client = new Client({ name: "delegation-tests", version: "1" });
+    const channelEvents = [];
+    client.fallbackNotificationHandler = async notification => {
+      if (notification.method === "notifications/claude/channel") channelEvents.push(notification.params);
+    };
     clients.push(client);
     await client.connect(transport);
     return {
-      client, transport,
+      client, transport, channelEvents,
       call: (suffix, args) => client.callTool({ name: `delegate_${provider}${suffix}`, arguments: args }),
     };
   }
@@ -66,6 +70,8 @@ for (const provider of ["codex", "claude"]) {
     const discovery = await c.client.listTools();
     assert.equal(discovery.tools.length, 7);
     assert.ok(discovery.tools.some(tool => tool.name === `delegate_${provider}_cancel`));
+    assert.deepEqual(c.client.getServerCapabilities().experimental?.["claude/channel"], provider === "codex" ? {} : undefined);
+    if (provider === "codex") assert.match(c.client.getInstructions(), /delegate_codex_status/);
     for (const [suffix, args] of [
       ["_review", { prompt: "Review first request", files: ["one.ts", "two,with-comma.ts"] }],
       ["_plan_review", { plan: "Critique the second plan" }],
@@ -90,6 +96,7 @@ for (const provider of ["codex", "claude"]) {
         assert.ok(!request.args.includes("--approve-for-me"));
         assert.ok(request.args.some(arg => arg.includes("claude-delegate") && arg.includes("enabled=false")));
       } else {
+        assert.equal(c.channelEvents.length, 0);
         assert.equal(request.args[request.args.indexOf("--tools") + 1], "Read,Glob,Grep");
         assert.ok(request.args.includes("--strict-mcp-config"));
         assert.ok(request.args.includes("dontAsk"));
@@ -97,12 +104,22 @@ for (const provider of ["codex", "claude"]) {
       }
     }
   });
+
+  test(`${provider}: defaults an omitted cwd to the host's working directory`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect(provider, {}, f.project);
+    const result = await c.call("", { prompt: "Say hi", wait: true });
+    assert.equal(result.isError, false, text(result));
+    assert.equal(result.structuredContent.cwd, f.project);
+    assert.equal(result.structuredContent.workspace, f.project);
+    assert.equal((await f.requests())[0].cwd, f.project);
+  });
 }
 
-test("requires an absolute directory and resolves CLAUDE_PROJECT_DIR and symlinks", async t => {
+test("validates explicit paths and prefers cwd over CLAUDE_PROJECT_DIR over the launch directory", async t => {
   const f = await fixture(t);
   const c = await f.connect();
-  for (const args of [{ prompt: "test" }, { prompt: "test", cwd: "relative" }, { prompt: "test", cwd: f.capture }]) {
+  for (const args of [{ prompt: "test", cwd: "" }, { prompt: "test", cwd: "relative" }, { prompt: "test", cwd: f.capture }]) {
     const result = await c.call("", args);
     assert.equal(result.isError, true, text(result));
   }
@@ -112,6 +129,29 @@ test("requires an absolute directory and resolves CLAUDE_PROJECT_DIR and symlink
   const implicit = await f.connect("codex", { CLAUDE_PROJECT_DIR: alias });
   const result = await implicit.call("", { prompt: "test", wait: true });
   assert.equal(result.structuredContent.cwd, f.project);
+  const explicit = await implicit.call("", { prompt: "override the environment", cwd: f.root, wait: true });
+  assert.equal(explicit.structuredContent.cwd, f.root);
+  assert.equal((await f.requests()).at(-1).cwd, f.root);
+});
+
+test("Codex accepts the host-selected non-Git project in both execution modes", async t => {
+  const f = await fixture(t);
+  assert.notEqual(spawnSync("git", ["-C", f.project, "rev-parse", "--show-toplevel"], { stdio: "ignore" }).status, 0);
+  const c = await f.connect("codex", { CLAUDE_PROJECT_DIR: f.project, FAKE_CHECK_GIT_REPO: "1" });
+  for (const mode of ["read-only", "edit"]) {
+    const result = await c.call("", { prompt: "Say hi", mode, wait: true });
+    assert.equal(result.structuredContent.status, "completed", text(result));
+    const request = (await f.requests()).at(-1);
+    assert.equal(request.cwd, f.project);
+    assert.ok(request.args.includes("--skip-git-repo-check"));
+    assert.ok(!request.args.includes("--dangerously-bypass-approvals-and-sandbox"));
+    if (mode === "read-only") {
+      assert.equal(request.args[request.args.indexOf("--sandbox") + 1], "read-only");
+      assert.ok(request.args.includes('approval_policy="never"'));
+    } else {
+      assert.ok(request.args.includes("--approve-for-me"));
+    }
+  }
 });
 
 test("results and task lists persist across MCP restarts", async t => {
@@ -137,6 +177,50 @@ test("uses bounded status waiting for background jobs", async t => {
   const completed = await c.call("_status", { task_id: result.structuredContent.task_id, wait_ms: 3000 });
   assert.equal(completed.structuredContent.status, "completed");
 });
+
+for (const [scenario, prompt, status, timeoutMs] of [
+  ["success", "[slow] channel result", "completed"],
+  ["failure", "[slow] [fail]", "failed"],
+  ["timeout", "[hold]", "failed", 300],
+  ["cancellation", "[hold]", "cancelled"],
+  ["interruption", "[hold]", "interrupted"],
+]) {
+  test(`Codex channel reports ${scenario} with a retrievable saved result`, { skip: scenario === "interruption" && process.platform === "win32" }, async t => {
+    const f = await fixture(t);
+    const c = await f.connect();
+    // Desktop notifications are disabled by the fixture; channel delivery is independent.
+    const started = await c.call("", { prompt, cwd: f.project, ...(timeoutMs ? { timeout_ms: timeoutMs } : {}) });
+    const id = started.structuredContent.task_id;
+    assert.equal(started.structuredContent.status, "running");
+    assert.match(text(started), /explicitly enabled the codex-delegate channel/);
+    assert.match(text(started), /wait_ms=30000/);
+    if (status === "cancelled" || status === "interrupted") {
+      await eventually(async () => (await f.requests()).length === 1);
+      if (status === "cancelled") await c.call("_cancel", { task_id: id });
+      else process.kill(c.transport.pid, "SIGTERM");
+    }
+    const event = await eventually(() => c.channelEvents.find(event => event.meta.task_id === id));
+    assert.equal(event.meta.task_type, "custom");
+    assert.equal(event.meta.status, status);
+    assert.match(event.meta.duration, /^\d+(s|m \d+s|h \d+m)$/);
+    assert.ok(Object.values(event.meta).every(value => typeof value === "string"));
+    assert.ok(event.content.includes(id));
+    assert.match(event.content, /delegate_codex_status/);
+    assert.equal((await f.store.read(id)).status, status);
+    const reader = status === "interrupted" ? await f.connect() : c;
+    const result = await reader.call("_status", { task_id: id });
+    assert.equal(result.structuredContent.status, status);
+    if (status === "completed") {
+      assert.equal(result.structuredContent.output, "fixture answer\n");
+      await c.client.close();
+      const restarted = await f.connect();
+      const recovered = await restarted.call("_status", { task_id: id });
+      assert.equal(recovered.structuredContent.output, "fixture answer\n");
+      assert.equal(restarted.channelEvents.length, 0, "Saved results should not replay old events");
+    }
+    assert.equal(c.channelEvents.filter(event => event.meta.task_id === id).length, 1);
+  });
+}
 
 test("one edit lock spans both providers, symlinks, and Git subdirectories", async t => {
   const f = await fixture(t);

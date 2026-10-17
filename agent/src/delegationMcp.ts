@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { JobManager } from "./jobs.js";
-import { notifyCompletion } from "./notifications.js";
+import { notifyChannel, notifyCompletion } from "./notifications.js";
 import { ExecutionMode, isFinished, Job, Provider, TaskType } from "./tasks.js";
 
 const MAX_RESULT_CHARS = 64000;
@@ -31,16 +31,31 @@ function filesArg(args: Record<string, unknown>): string[] | undefined {
 }
 
 export async function serveDelegation(provider: Provider): Promise<void> {
-  const manager = new JobManager(undefined, undefined, notifyCompletion);
-  await manager.store.init();
   const label = provider === "codex" ? "Codex" : "Claude";
   const prefix = `delegate_${provider}`;
-  const server = new Server({ name: `${provider}-delegate`, version: "0.3.0" }, { capabilities: { tools: {} } });
+  const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
+  const completionGuidance = (provider === "codex"
+    ? "If this session explicitly enabled the codex-delegate channel, await its completion event while doing independent work, then fetch the result with delegate_codex_status. " +
+      `If channel delivery is unavailable or uncertain: ${statusGuidance}`
+    : statusGuidance) + " A running job is not a finished answer.";
+  const server = new Server({ name: `${provider}-delegate`, version: "0.3.0" }, {
+    capabilities: { tools: {}, ...(provider === "codex" ? { experimental: { "claude/channel": {} } } : {}) },
+    instructions: provider === "codex"
+      ? 'Codex jobs emit one-way <channel source="codex-delegate" task_id="..." task_type="..." status="completed|failed|cancelled|interrupted" duration="..."> events. ' +
+        "When one arrives, call delegate_codex_status with its task_id and present the saved result unless already collected. No reply to the channel is expected. " +
+        "Events are best effort and are not replayed after reconnecting; use status to recover saved results. " + completionGuidance
+      : undefined,
+  });
+  const manager = new JobManager(undefined, undefined, job => {
+    notifyCompletion(job);
+    void notifyChannel(server, job);
+  });
+  await manager.store.init();
   const common = {
-    cwd: { type: "string", description: "Absolute project directory. Required unless the host supplies CLAUDE_PROJECT_DIR. The resolved path is returned with the job." },
+    cwd: { type: "string", description: "Optional absolute project directory. Defaults to CLAUDE_PROJECT_DIR, then the directory where the host launched this server. Pass explicitly to target another project. The resolved path is returned with the job." },
     files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." },
     mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." },
-    wait: { type: "boolean", description: "Wait for the final answer in this call. Default false: return a persistent task ID, then use status with wait_ms to await completion." },
+    wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
     timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: "Worker timeout in milliseconds (default two hours)." },
   };
   const kinds: Array<[string, TaskType, string]> = [
@@ -51,7 +66,7 @@ export async function serveDelegation(provider: Provider): Promise<void> {
   ];
   const tools = kinds.map(([suffix, type, description]) => ({
     name: prefix + suffix,
-    description: description + ` Returns a durable job and final result or task ID. Continue with ${prefix}_status until complete; a running task is not a finished answer.`,
+    description: description + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
     inputSchema: {
       type: "object" as const, additionalProperties: false,
       properties: { [type === "plan-review" ? "plan" : "prompt"]: { type: "string", description: "Complete task instructions, requirements, and constraints for this call." }, ...common },
@@ -89,7 +104,7 @@ export async function serveDelegation(provider: Provider): Promise<void> {
       ...(job.sessionId ? [`**Session ID**: ${job.sessionId}`] : []), ...(job.error ? [`**Error**: ${job.error}`] : []),
       `**Metadata**: ${paths.job}`, `**Result**: ${paths.result}`, `**Stdout log**: ${paths.stdout}`, `**Stderr log**: ${paths.stderr}`,
       ...(excerpt ? ["", "## Result", "", excerpt, ...(output.length > excerpt.length ? [`\nResult excerpt truncated. Read the full answer from ${paths.result}.`] : [])] : []),
-      ...(!isFinished(job) ? [`\nContinue with ${prefix}_status using task_id=${job.id} and wait_ms=30000. Do not treat a running job as completed.`] : []),
+      ...(!isFinished(job) ? [`\n${completionGuidance}`] : []),
     ].join("\n");
     return {
       content: [{ type: "text" as const, text }],

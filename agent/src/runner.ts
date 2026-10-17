@@ -21,6 +21,9 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
     return {
       command: process.env.CODEX_BIN || "codex-pool",
       args: ["exec", ...(job.mode === "edit" ? ["--approve-for-me"] : ["--sandbox", "read-only", "-c", 'approval_policy="never"']),
+        // The host selected this project; allow non-Git directories without
+        // changing the job's sandbox or approval policy.
+        "--skip-git-repo-check",
         "--json", "--output-last-message", store.file(job.id, "answer.tmp"),
         // Complete disabled entries also work when these servers aren't registered.
         "-c", 'mcp_servers.claude-delegate={command="node",args=[],enabled=false}',

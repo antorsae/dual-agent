@@ -10,9 +10,11 @@ Use the `claude-delegate` MCP server. Choose `delegate_claude_review`,
 Write the prompt for the current task, with requirements, relevant files, and
 acceptance criteria. Do not ask the user to supply a command or repeat context.
 
-Pass `cwd` as the absolute project directory. Review, plan-review, and custom
-tasks default to `read-only`; implementation defaults to `edit`. For a custom
-task that needs edits, explicitly set `mode: "edit"`.
+Omit `cwd` to use `CLAUDE_PROJECT_DIR` when set, otherwise the project directory
+where the host launched the server. Pass an absolute `cwd` when targeting another
+project or if the host has changed projects since launch. Review, plan-review,
+and custom tasks default to `read-only`; implementation defaults to `edit`.
+For a custom task that needs edits, explicitly set `mode: "edit"`.
 
 An independent review is useful after a complex implementation or when choosing
 between substantial approaches. Skip delegation for trivial changes or when

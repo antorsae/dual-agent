@@ -54,9 +54,10 @@ export async function workerMayBeAlive(job: Job): Promise<boolean> {
 }
 
 export async function resolveProject(requested?: string): Promise<{ cwd: string; workspace: string }> {
-  const directory = requested ?? process.env.CLAUDE_PROJECT_DIR;
+  // Stdio hosts launch the server in the session's project directory.
+  const directory = requested ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd();
   if (!directory || !isAbsolute(directory)) {
-    throw new Error("Provide cwd as an absolute project directory (or set CLAUDE_PROJECT_DIR).");
+    throw new Error("cwd must be an absolute project directory.");
   }
   const cwd = await realpath(directory);
   if (!(await stat(cwd)).isDirectory()) throw new Error(`Not a directory: ${cwd}`);
