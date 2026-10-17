@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Uninstall script for Dual Agent Development Environment
-# Reverses everything done by setup-dual-agent.sh
+# Removes registrations and installed skills; preserves task and browser data
 #
 
 set -e
@@ -52,10 +52,17 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} chatgpt-pro-worker MCP server not found"
 fi
 
-# 2. Remove Claude skills
+if codex mcp remove claude-delegate 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed claude-delegate MCP server"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} claude-delegate MCP server not found"
+fi
+
+# 2. Remove current and legacy Claude skills
 echo -e "${YELLOW}Removing Claude Code skills...${NC}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-CLAUDE_SKILLS=(codex-read codex-status chatgpt-code-review codex-implement codex-plan-review codex-review)
+CLAUDE_SKILLS=(codex-delegate codex-read codex-status chatgpt-code-review codex-implement codex-plan-review codex-review)
 
 for skill in "${CLAUDE_SKILLS[@]}"; do
     if [ -d "$CLAUDE_SKILLS_DIR/$skill" ]; then
@@ -67,10 +74,10 @@ for skill in "${CLAUDE_SKILLS[@]}"; do
     fi
 done
 
-# 3. Remove Codex skills
+# 3. Remove current and legacy Codex skills
 echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
-CODEX_SKILLS_DIR="$HOME/.codex/skills"
-CODEX_SKILLS=(claude-status read-task respond chatgpt-pro-worker)
+CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+CODEX_SKILLS=(claude-delegate claude-status read-task respond chatgpt-pro-worker)
 
 for skill in "${CODEX_SKILLS[@]}"; do
     if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then
@@ -84,9 +91,6 @@ done
 
 # Also check additional Codex config directories
 for codex_dir in "$HOME"/.codex*/; do
-    if [ "$codex_dir" = "$HOME/.codex/" ]; then
-        continue
-    fi
     skills_dir="${codex_dir}skills"
     if [ -d "$skills_dir" ]; then
         for skill in "${CODEX_SKILLS[@]}"; do
@@ -99,7 +103,7 @@ for codex_dir in "$HOME"/.codex*/; do
     fi
 done
 
-# 4. Remove dual-agent permissions and MCP server from Claude settings
+# 4. Remove legacy permissions and obsolete settings-based MCP registration
 echo -e "${YELLOW}Removing dual-agent config from Claude settings...${NC}"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 
@@ -108,7 +112,7 @@ if [ -f "$CLAUDE_SETTINGS" ] && command -v jq &>/dev/null; then
     # with embedded $() and double quotes in permission strings
     TMPJQ=$(mktemp)
     cat > "$TMPJQ" <<'JQEOF'
-.permissions.allow -= [
+if .permissions.allow then .permissions.allow -= [
   "Bash(cat .agent-collab:*)",
   "Bash(echo idle > .agent-collab/status)",
   "Bash(echo pending > .agent-collab/status)",
@@ -116,7 +120,7 @@ if [ -f "$CLAUDE_SETTINGS" ] && command -v jq &>/dev/null; then
   "Bash(echo done > .agent-collab/status)",
   "Bash(while [ \"$(cat .agent-collab/status)\" != \"done\" ]; do sleep:*)",
   "Bash(tmux send-keys:*)"
-]
+] else . end
 | del(.mcpServers["codex-delegate"])
 JQEOF
     UPDATED=$(jq -f "$TMPJQ" "$CLAUDE_SETTINGS")
@@ -140,31 +144,6 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} No saved launcher preferences"
 fi
 
-# 6. Remove .agent-collab directory
-echo -e "${YELLOW}Removing .agent-collab directory...${NC}"
-if [ -d "$SCRIPT_DIR/.agent-collab" ]; then
-    rm -rf "$SCRIPT_DIR/.agent-collab"
-    echo -e "  ${GREEN}[OK]${NC} Removed .agent-collab/"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} .agent-collab/ not found"
-fi
-
-# 7. Remove .agent-collab from .gitignore
-echo -e "${YELLOW}Cleaning .gitignore...${NC}"
-GITIGNORE="$SCRIPT_DIR/.gitignore"
-if [ -f "$GITIGNORE" ] && grep -q ".agent-collab" "$GITIGNORE"; then
-    # Remove the comment line and the .agent-collab/ entry
-    sed -i '/^# Dual agent collaboration files$/d' "$GITIGNORE"
-    sed -i '/^\.agent-collab\/$/d' "$GITIGNORE"
-    # Remove trailing blank lines left behind
-    sed -i -e :a -e '/^\n*$/{$d;N;ba' -e '}' "$GITIGNORE"
-    echo -e "  ${GREEN}[OK]${NC} Removed .agent-collab from .gitignore"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} .agent-collab not in .gitignore"
-fi
-
 echo ""
 echo -e "${GREEN}=======================================${NC}"
 echo -e "${GREEN}  Uninstall Complete!${NC}"
@@ -176,5 +155,6 @@ else
     echo -e "${YELLOW}Nothing to remove — environment was already clean.${NC}"
 fi
 echo ""
-echo -e "${BLUE}Note:${NC} Restart Claude Code to unload MCP tools."
+echo -e "${BLUE}Note:${NC} Restart Claude Code and Codex to unload MCP tools."
+echo "Saved task results, browser profiles, and project files were preserved."
 echo ""

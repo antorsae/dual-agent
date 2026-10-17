@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -15,22 +15,25 @@ async function fixture(t, missingBinaries = []) {
   const bin = join(dir, "bin");
   const log = join(dir, "calls.jsonl");
   await Promise.all([
-    mkdir(bin),
-    mkdir(testHome),
-    mkdir(join(dir, "agent", "dist"), { recursive: true }),
+    mkdir(bin), mkdir(testHome), mkdir(join(dir, "agent", "dist"), { recursive: true }),
   ]);
-  const source = await readFile(new URL("../../setup-dual-agent.sh", import.meta.url), "utf8");
-  // Redirect installer-managed files in a copy, without changing process HOME.
-  await writeFile(join(dir, "setup.sh"), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
-  const launcher = await readFile(new URL("../../start-dual-agent.sh", import.meta.url), "utf8");
-  await writeFile(join(dir, "start-dual-agent.sh"), launcher.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
+  for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh"]) {
+    const source = await readFile(new URL("../../" + script, import.meta.url), "utf8");
+    // Redirect managed files without changing the process HOME.
+    await writeFile(join(dir, script), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
+  }
+  for (const [role, skill] of [[".claude", "chatgpt-code-review"], [".codex", "chatgpt-pro-worker"], [".claude", "codex-delegate"], [".codex", "claude-delegate"]]) {
+    const path = join(dir, role, "skills", skill);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, "SKILL.md"), skill + " fixture");
+  }
   await writeFile(join(dir, "agent", "dist", "mcp.js"), "");
+  await writeFile(join(dir, "agent", "dist", "claudeMcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "chatgptProMcp.js"), "");
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
   await writeFile(log, "");
-  // Isolate PATH so missing-binary tests cannot find a real Codex installation.
   await symlink(process.execPath, join(bin, "node"));
-  for (const command of ["bash", "dirname", "cat", "jq", "mkdir", "awk", "sed", "chmod", "basename", "cp"]) {
+  for (const command of ["bash", "dirname", "cat", "jq", "mkdir", "cp", "rm", "rmdir", "mktemp"]) {
     const result = spawnSync("bash", ["-c", 'command -v "$1"', "--", command], { encoding: "utf8" });
     assert.ifError(result.error);
     assert.equal(result.status, 0, `${command} is required for setup tests`);
@@ -42,63 +45,31 @@ async function fixture(t, missingBinaries = []) {
     'const name = require("node:path").basename(process.argv[1]);',
     "const args = process.argv.slice(2);",
     'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args }) + "\\n");',
-    'if (name === "claude" && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_CLAUDE === "1") process.exit(1);',
-    'if (name === "tmux" && args[0] === "-V") process.stdout.write("tmux 3.6a\\n");',
-    'if (name === "tmux" && args[0] === "has-session") process.exit(1);',
-    'if (name.startsWith("custom codex")) process.stdout.write("custom executable");',
+    'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
+    'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
+    'if (name.startsWith("custom codex")) { process.stdin.resume(); process.stdin.on("end", () => { fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "custom executable"); }); }',
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
-  for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "tmux", "custom codex $'quoted"]) {
-    if (missingBinaries.includes(file)) continue;
-    await writeFile(join(bin, file), mock, { mode: 0o755 });
+  for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "notify-send", "custom codex $'quoted"]) {
+    if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
-  const env = {
-    ...process.env,
-    PATH: bin,
-    DUAL_AGENT_TEST_HOME: testHome,
-    DUAL_AGENT_TEST_LOG: log,
-  };
-  delete env.CODEX_BIN;
-  delete env.CODEX_HOME;
-  delete env.XDG_CONFIG_HOME;
-  delete env.DUAL_AGENT_TEST_FAIL_CLAUDE;
+  const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND"]) delete env[key];
+  async function runScript(script, args, input, overrides, expectedStatus) {
+    const result = spawnSync("bash", [join(dir, script), ...args], {
+      cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
+    });
+    assert.ifError(result.error);
+    const output = result.stdout + result.stderr;
+    assert.equal(result.status, expectedStatus, output);
+    const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
+    return { calls, output };
+  }
   return {
     dir, testHome, customBinary, env,
-    async run(args, input, overrides = {}, expectedStatus = 0) {
-      const result = spawnSync("bash", [join(dir, "setup.sh"), ...args], {
-        cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
-      });
-      assert.ifError(result.error);
-      const output = result.stdout + result.stderr;
-      assert.equal(result.status, expectedStatus, output);
-      const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      return { calls, output };
-    },
-    async launch(overrides = {}, projectDir = dir) {
-      await writeFile(log, "");
-      const result = spawnSync("bash", [join(dir, "start-dual-agent.sh"), "test-session", projectDir], {
-        cwd: dir, env: { ...env, ...overrides }, encoding: "utf8", timeout: 15000,
-      });
-      assert.ifError(result.error);
-      const output = result.stdout + result.stderr;
-      assert.equal(result.status, 0, output);
-      const calls = (await readFile(log, "utf8")).trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
-      return { calls, output };
-    },
+    run: (args = [], input = "", overrides = {}, status = 0) => runScript("setup-dual-agent.sh", args, input, overrides, status),
+    uninstall: (overrides = {}) => runScript("uninstall-dual-agent.sh", [], "", overrides, 0),
   };
-}
-
-function assertChromeLaunch({ calls, output }, enabled) {
-  const commands = calls
-    .filter((call) => call.name === "tmux" && call.args[0] === "send-keys" && call.args[2] === "test-session:0.0")
-    .map((call) => call.args[3]);
-  assert.deepEqual(commands.filter((command) => /^claude(?: |$)/.test(command)), [enabled ? "claude --chrome" : "claude --no-chrome"]);
-  const banner = commands.find((command) => command.startsWith("echo 'Skills:"));
-  assert.ok(banner, "expected Claude pane skills banner");
-  assert.equal(banner.includes("/chatgpt-code-review"), enabled);
-  const summary = output.split("\n").find((line) => line.startsWith("Claude Skills:"));
-  assert.ok(summary, "expected launcher skills summary");
-  assert.equal(summary.includes("/chatgpt-code-review"), enabled);
 }
 
 function registrationEnv(calls, name) {
@@ -115,9 +86,7 @@ function registrationEnv(calls, name) {
 }
 
 function runNode(code, env) {
-  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", code], {
-    env, encoding: "utf8", timeout: 5000,
-  });
+  const result = spawnSync(process.execPath, ["--input-type=module", "--eval", code], { env, encoding: "utf8", timeout: 5000 });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   return JSON.parse(result.stdout);
@@ -125,9 +94,10 @@ function runNode(code, env) {
 
 test("persists CODEX_BIN for a fresh delegate process", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], "2c", { CODEX_BIN: f.customBinary });
+  const { calls } = await f.run(["--mcp"], "", { CODEX_BIN: f.customBinary });
   const saved = registrationEnv(calls, "claude");
   assert.equal(saved.CODEX_BIN, f.customBinary);
+  assert.equal(saved.DUAL_AGENT_STATE_DIR, join(f.testHome, ".local/state/dual-agent"));
   const result = runNode(
     "import { runCodex } from " + JSON.stringify(codexModule) + ";" +
     'console.log(JSON.stringify(await runCodex({ type: "custom", prompt: "test" }, { stream: false, timeout: 2000 })));',
@@ -137,114 +107,218 @@ test("persists CODEX_BIN for a fresh delegate process", async (t) => {
   assert.equal(result.output, "custom executable");
 });
 
-test("persists CODEX_BIN in the JSON fallback", async (t) => {
-  const f = await fixture(t);
-  await f.run([], "2c", { CODEX_BIN: f.customBinary, DUAL_AGENT_TEST_FAIL_CLAUDE: "1" });
-  const config = JSON.parse(await readFile(join(f.testHome, ".claude.json"), "utf8"));
-  assert.equal(config.unrelated, true);
-  assert.equal(config.mcpServers["codex-delegate"].env.CODEX_BIN, f.customBinary);
-});
-
-test("warns and registers codex when codex-pool is unavailable", async (t) => {
+test("registers codex when codex-pool is unavailable", async (t) => {
   const f = await fixture(t, ["codex-pool"]);
-  const { calls, output } = await f.run([], "2c");
+  const { calls, output } = await f.run([], "1c");
   assert.match(output, /\[WARN\].*codex-pool.*falling back to codex/);
-  assert.doesNotMatch(output, /\[MISSING\]/);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex");
 });
 
-test("persists the codex fallback when CLI registration fails", async (t) => {
-  const f = await fixture(t, ["codex-pool"]);
-  await f.run([], "2c", { DUAL_AGENT_TEST_FAIL_CLAUDE: "1" });
-  const config = JSON.parse(await readFile(join(f.testHome, ".claude.json"), "utf8"));
-  assert.equal(config.unrelated, true);
-  assert.equal(config.mcpServers["codex-delegate"].env.CODEX_BIN, "codex");
-});
+for (const existingConfig of [true, false]) {
+  test(`registration failure stops setup with ${existingConfig ? "existing" : "missing"} Claude config`, async (t) => {
+    const f = await fixture(t);
+    const config = join(f.testHome, ".claude.json");
+    if (!existingConfig) await rm(config);
+    const { output } = await f.run(["--mcp"], "", { DUAL_AGENT_TEST_FAIL_REGISTER: "claude" }, 1);
+    assert.match(output, /registration denied/);
+    assert.match(output, /Could not register codex-delegate/);
+    assert.doesNotMatch(output, /Setup Complete/);
+    if (existingConfig) assert.equal(await readFile(config, "utf8"), '{"unrelated":true}');
+    else await assert.rejects(access(config), { code: "ENOENT" });
+  });
+}
 
 test("fails dependency checks when neither Codex binary is available", async (t) => {
   const f = await fixture(t, ["codex-pool", "codex"]);
-  const { calls, output } = await f.run([], "2c", {}, 1);
+  const { calls, output } = await f.run(["--mcp"], "", {}, 1);
   assert.match(output, /\[MISSING\].*codex/);
   assert.deepEqual(calls, []);
 });
 
 test("does not replace an unavailable custom CODEX_BIN", async (t) => {
   const f = await fixture(t);
-  const { calls, output } = await f.run([], "2c", { CODEX_BIN: "missing-custom-codex" }, 1);
+  const { calls, output } = await f.run(["--mcp"], "", { CODEX_BIN: "missing-custom-codex" }, 1);
   assert.match(output, /\[MISSING\].*missing-custom-codex/);
   assert.doesNotMatch(output, /falling back/);
   assert.deepEqual(calls, []);
 });
 
-test("passes a custom CODEX_HOME to a fresh worker process", async (t) => {
+test("passes a custom CODEX_HOME to the worker and installs its skill there", async (t) => {
   const f = await fixture(t);
   const configDir = join(f.dir, "custom codex config");
   await mkdir(configDir);
-  await writeFile(join(configDir, "config.toml"), [
-    'model = "gpt-6-astra"',
-    'model_reasoning_effort = "low"',
-    'service_tier = "ultrafast"',
-  ].join("\n"));
+  await writeFile(join(configDir, "config.toml"), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "low"\nservice_tier = "ultrafast"\n');
   const { calls } = await f.run(["--pro-worker"], "", { CODEX_HOME: configDir });
   const saved = registrationEnv(calls, "codex");
   assert.equal(saved.CODEX_HOME, configDir);
   const settings = runNode(
-    "import { loadChatGptSettings } from " + JSON.stringify(settingsModule) + ";" +
-    "console.log(JSON.stringify(await loadChatGptSettings()));",
+    "import { loadChatGptSettings } from " + JSON.stringify(settingsModule) + ";console.log(JSON.stringify(await loadChatGptSettings()));",
     { ...f.env, ...saved }
   );
   assert.equal(settings.model.value, "gpt-6-astra");
   assert.equal(settings.effort.value, "low");
   assert.equal(settings.speed.value, "ultrafast");
-  assert.equal(settings.source, join(configDir, "config.toml"));
+  assert.equal(await readFile(join(configDir, "skills/chatgpt-pro-worker/SKILL.md"), "utf8"), "chatgpt-pro-worker fixture");
 });
 
-test("registers explicit defaults when overrides are unset", async (t) => {
+test("registers Codex delegation and the Pro worker from the component menu", async (t) => {
   const f = await fixture(t);
-  const { calls, output } = await f.run([], "25c");
+  const { calls } = await f.run([], "14c");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
-  assert.doesNotMatch(output, /falling back/);
 });
 
-test("launches without Chrome when no setup preference exists", async (t) => {
-  const f = await fixture(t);
-  assertChromeLaunch(await f.launch(), false);
+test("Chrome-only setup installs its skill without a launcher preference", async (t) => {
+  const f = await fixture(t, ["codex", "codex-pool", "npm"]);
+  const { calls } = await f.run([], "3c");
+  assert.equal(await readFile(join(f.testHome, ".claude/skills/chatgpt-code-review/SKILL.md"), "utf8"), "chatgpt-code-review fixture");
+  await assert.rejects(access(join(f.testHome, ".config/dual-agent/chrome-enabled")), { code: "ENOENT" });
+  assert.deepEqual(calls, []);
 });
 
-test("tmux-only setup launches without Chrome", async (t) => {
+test("repeated setup preserves project data and Claude settings", async (t) => {
   const f = await fixture(t);
-  await f.run([], "3c");
-  assertChromeLaunch(await f.launch(), false);
+  const paths = [join(f.dir, ".agent-collab/context/shared.md"), join(f.dir, ".agent-collab/requests/task.md"), join(f.dir, ".agent-collab/responses/response.md"), join(f.dir, ".gitignore"), join(f.testHome, ".claude/settings.json")];
+  for (const path of paths) {
+    await mkdir(join(path, ".."), { recursive: true });
+    await writeFile(path, "user data to preserve");
+  }
+  await f.run(["--mcp"]);
+  await f.run(["--mcp"]);
+  for (const path of paths) assert.equal(await readFile(path, "utf8"), "user data to preserve");
 });
 
-test("launcher follows setup selection even when a previous Chrome skill remains installed", async (t) => {
+for (const command of ["npm", "npx"]) {
+  test(`${command} failures stop setup and retain diagnostics`, async (t) => {
+    const f = await fixture(t);
+    const { output } = await f.run(["--pro-worker"], "", { DUAL_AGENT_TEST_FAIL_COMMAND: command }, 1);
+    assert.match(output, /fixture command failed/);
+    assert.doesNotMatch(output, /Setup Complete/);
+  });
+}
+
+test("Pro worker registration failures stop setup", async (t) => {
   const f = await fixture(t);
-  const skillDir = join(f.dir, ".claude", "skills", "chatgpt-code-review");
-  await mkdir(skillDir, { recursive: true });
-  await writeFile(join(skillDir, "SKILL.md"), "Chrome review fixture");
-
-  await f.run([], "34c");
-  assertChromeLaunch(await f.launch(), true);
-
-  await f.run([], "3c");
-  assert.equal(await readFile(join(f.testHome, ".claude", "skills", "chatgpt-code-review", "SKILL.md"), "utf8"), "Chrome review fixture");
-  assertChromeLaunch(await f.launch(), false);
+  const { output } = await f.run(["--pro-worker"], "", { DUAL_AGENT_TEST_FAIL_REGISTER: "codex" }, 1);
+  assert.match(output, /Could not register chatgpt-pro-worker/);
+  assert.doesNotMatch(output, /Setup Complete/);
 });
 
-test("Chrome-only setup applies to other projects and honors XDG_CONFIG_HOME", async (t) => {
+test("missing build output stops setup before registration", async (t) => {
   const f = await fixture(t);
-  const env = { XDG_CONFIG_HOME: join(f.dir, "custom config") };
-  const projectDir = join(f.dir, "another project");
-  await mkdir(projectDir);
-  await f.run([], "4c", env);
-  assertChromeLaunch(await f.launch(env, projectDir), true);
-  assertChromeLaunch(await f.launch({}, projectDir), false);
+  await rm(join(f.dir, "agent/dist/mcp.js"));
+  const { calls, output } = await f.run(["--mcp"], "", {}, 1);
+  assert.match(output, /MCP build output not found/);
+  assert.ok(!calls.some(call => call.name === "claude"));
 });
 
-test("installing only the Pro worker preserves the Chrome launch preference", async (t) => {
+test("uninstall removes legacy skills and permissions while preserving saved data", async (t) => {
   const f = await fixture(t);
-  await f.run([], "34c");
-  await f.run(["--pro-worker"], "");
-  assertChromeLaunch(await f.launch(), true);
+  const legacySkill = join(f.testHome, ".claude/skills/codex-read");
+  const settings = join(f.testHome, ".claude/settings.json");
+  const saved = join(f.dir, ".agent-collab/context/shared.md");
+  await mkdir(legacySkill, { recursive: true });
+  await writeFile(join(legacySkill, "SKILL.md"), "legacy skill");
+  await writeFile(settings, JSON.stringify({ permissions: { allow: ["Bash(tmux send-keys:*)", "Read"] }, unrelated: true }));
+  await mkdir(join(saved, ".."), { recursive: true });
+  await writeFile(saved, "saved context");
+  await writeFile(join(f.dir, ".gitignore"), ".agent-collab/\n");
+  await f.uninstall();
+  await assert.rejects(access(legacySkill), { code: "ENOENT" });
+  assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { permissions: { allow: ["Read"] }, unrelated: true });
+  assert.equal(await readFile(saved, "utf8"), "saved context");
+  assert.equal(await readFile(join(f.dir, ".gitignore"), "utf8"), ".agent-collab/\n");
+});
+
+test("uninstall tolerates Claude settings with no permissions", async (t) => {
+  const f = await fixture(t);
+  await mkdir(join(f.testHome, ".claude"));
+  const settings = join(f.testHome, ".claude/settings.json");
+  await writeFile(settings, '{"unrelated":true}');
+  await f.uninstall();
+  assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { unrelated: true });
+});
+
+
+test("installs both delegation directions with the same state path", async (t) => {
+  const f = await fixture(t);
+  const state = join(f.dir, "shared state");
+  const { calls } = await f.run(["--both"], "", { DUAL_AGENT_STATE_DIR: state });
+  const forward = registrationEnv(calls, "claude");
+  const reverse = registrationEnv(calls, "codex");
+  assert.equal(forward.DUAL_AGENT_STATE_DIR, state);
+  assert.equal(reverse.DUAL_AGENT_STATE_DIR, state);
+  assert.equal(reverse.CLAUDE_BIN, join(f.dir, "bin/claude"));
+  assert.equal(await readFile(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"), "utf8"), "claude-delegate fixture");
+  assert.equal(await readFile(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"), "utf8"), "codex-delegate fixture");
+});
+
+test("reverse-only setup persists custom executable, config, and state directories", async (t) => {
+  const f = await fixture(t, ["claude", "codex-pool"]);
+  const configDir = join(f.dir, "codex config");
+  const claudeConfigDir = join(f.dir, "claude config");
+  const stateBase = join(f.dir, "xdg state");
+  const { calls } = await f.run(["--claude-mcp"], "", {
+    CLAUDE_BIN: f.customBinary, CLAUDE_CONFIG_DIR: claudeConfigDir, CODEX_HOME: configDir, XDG_STATE_HOME: stateBase,
+  });
+  const saved = registrationEnv(calls, "codex");
+  assert.equal(saved.CLAUDE_BIN, f.customBinary);
+  assert.equal(saved.CLAUDE_CONFIG_DIR, claudeConfigDir);
+  assert.equal(saved.DUAL_AGENT_STATE_DIR, join(stateBase, "dual-agent"));
+  await access(join(configDir, "skills/claude-delegate/SKILL.md"));
+});
+
+test("reverse registration failure stops setup", async (t) => {
+  const f = await fixture(t);
+  const { output } = await f.run(["--claude-mcp"], "", { DUAL_AGENT_TEST_FAIL_REGISTER: "codex" }, 1);
+  assert.match(output, /Could not register claude-delegate/);
+  assert.doesNotMatch(output, /Setup Complete/);
+});
+
+test("interactive Claude selection installs its MCP server and host skill independently", async (t) => {
+  const f = await fixture(t, ["codex-pool", "npx"]);
+  const { calls, output } = await f.run([], "2c");
+  assert.match(output, /2\) \[1\] Use Claude from Codex/);
+  const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
+  assert.equal(registrations.length, 1);
+  assert.equal(registrations[0].name, "codex");
+  assert.equal(registrations[0].args[2], "claude-delegate");
+  assert.equal(await readFile(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"), "utf8"), "claude-delegate fixture");
+  await assert.rejects(access(join(f.testHome, ".claude/skills/codex-delegate")), { code: "ENOENT" });
+  assert.ok(!calls.some(call => call.name === "npx"));
+});
+
+test("interactive selection can install both delegation directions", async (t) => {
+  const f = await fixture(t);
+  const { calls } = await f.run([], "12c");
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
+  assert.equal(registrationEnv(calls, "codex").CLAUDE_BIN, join(f.dir, "bin/claude"));
+  await access(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"));
+  await access(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"));
+});
+
+test("deselecting Claude delegation skips its registration and skill", async (t) => {
+  const f = await fixture(t);
+  const { calls } = await f.run([], "122c");
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
+  assert.ok(!calls.some(call => call.name === "codex" && call.args[1] === "add"));
+  await assert.rejects(access(join(f.testHome, ".codex/skills/claude-delegate")), { code: "ENOENT" });
+});
+
+test("select all includes Claude delegation with the other integrations", async (t) => {
+  const f = await fixture(t);
+  const { calls } = await f.run([], "ac");
+  const codexServers = calls.filter(call => call.name === "codex" && call.args[1] === "add").map(call => call.args[2]);
+  assert.deepEqual(codexServers.sort(), ["chatgpt-pro-worker", "claude-delegate"]);
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
+  await access(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"));
+  await access(join(f.testHome, ".codex/skills/chatgpt-pro-worker/SKILL.md"));
+  await access(join(f.testHome, ".claude/skills/chatgpt-code-review/SKILL.md"));
+});
+
+test("explicit Codex flag installs the same integration as the legacy alias", async (t) => {
+  const f = await fixture(t);
+  const { calls } = await f.run(["--codex-mcp"]);
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
+  await access(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"));
 });

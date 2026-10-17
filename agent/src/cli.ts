@@ -11,7 +11,9 @@
  */
 
 import { readFile } from "fs/promises";
+import { parseArgs as parseNodeArgs } from "node:util";
 import { runCodex, runCodexToFile, TaskType } from "./codex.js";
+import type { ExecutionMode } from "./tasks.js";
 
 const USAGE = `
 codex-delegate - Delegate tasks to Codex CLI
@@ -28,10 +30,15 @@ Task Types:
 
 Options:
   --files <f1,f2>   Comma-separated list of files to include
-  --output <file>   Write response to file (for .agent-collab)
-  --no-stream       Buffer output instead of streaming
+  --output <file>   Write response to a Markdown file
+  --no-stream       Print output once the task finishes
   --timeout <ms>    Timeout in milliseconds (default: 300000)
+  --cwd <path>      Absolute project directory (default: current directory)
+  --mode <mode>     read-only or edit (default: edit for implement, otherwise read-only)
   --help            Show this help
+
+Options may appear before or after the prompt. Use -- before a prompt
+that starts with a dash.
 
 Examples:
   codex-delegate review "check src/auth.ts for vulnerabilities"
@@ -51,70 +58,59 @@ interface ParsedArgs {
   timeout: number;
   help: boolean;
   taskFile?: string;
+  cwd?: string;
+  mode?: ExecutionMode;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
-  const result: ParsedArgs = {
-    type: "custom",
-    prompt: "",
-    stream: true,
-    timeout: 5 * 60 * 1000,
-    help: false,
-  };
-
-  let i = 0;
-  while (i < args.length) {
-    const arg = args[i];
-
-    if (arg === "--help" || arg === "-h") {
-      result.help = true;
-      i++;
-    } else if (arg === "--file" || arg === "-f") {
-      result.taskFile = args[++i];
-      i++;
-    } else if (arg === "--files") {
-      result.files = args[++i]?.split(",").map((f) => f.trim());
-      i++;
-    } else if (arg === "--output" || arg === "-o") {
-      result.output = args[++i];
-      i++;
-    } else if (arg === "--no-stream") {
-      result.stream = false;
-      i++;
-    } else if (arg === "--timeout") {
-      result.timeout = parseInt(args[++i], 10);
-      i++;
-    } else if (!arg.startsWith("-")) {
-      // First positional arg is type, rest is prompt
-      if (!result.type || result.type === "custom") {
-        const validTypes = ["review", "implement", "plan-review", "custom"];
-        if (validTypes.includes(arg)) {
-          result.type = arg as TaskType;
-        } else {
-          // Not a valid type, treat as start of prompt
-          result.prompt = args.slice(i).join(" ");
-          break;
-        }
-      } else {
-        // Collect remaining as prompt
-        result.prompt = args.slice(i).join(" ");
-        break;
-      }
-      i++;
-    } else {
-      i++;
-    }
+  const { values, positionals } = parseNodeArgs({
+    args,
+    allowPositionals: true,
+    options: {
+      file: { type: "string", short: "f" },
+      files: { type: "string" },
+      output: { type: "string", short: "o" },
+      "no-stream": { type: "boolean" },
+      timeout: { type: "string" },
+      cwd: { type: "string" },
+      mode: { type: "string" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  const timeout = values.timeout === undefined ? 300000 : Number(values.timeout);
+  if (!Number.isSafeInteger(timeout) || timeout <= 0 || timeout > 2147483647) {
+    throw new Error("--timeout must be an integer between 1 and 2147483647 milliseconds");
   }
+  if (values.file && positionals.length && !values.help) {
+    throw new Error("Use either --file or a positional task/prompt, not both");
+  }
+  if (values.mode !== undefined && !["read-only", "edit"].includes(values.mode)) {
+    throw new Error("--mode must be read-only or edit");
+  }
+  const validTypes: TaskType[] = ["review", "implement", "plan-review", "custom"];
+  const type = validTypes.includes(positionals[0] as TaskType)
+    ? positionals.shift() as TaskType
+    : "custom";
 
-  return result;
+  return {
+    type,
+    prompt: positionals.join(" "),
+    files: values.files?.split(",").map((f) => f.trim()).filter(Boolean),
+    output: values.output,
+    stream: !values["no-stream"],
+    timeout,
+    help: values.help ?? false,
+    taskFile: values.file,
+    cwd: values.cwd,
+    mode: values.mode as ExecutionMode | undefined,
+  };
 }
 
 async function loadTaskFile(path: string): Promise<{ type: TaskType; prompt: string; files?: string[] }> {
   const content = await readFile(path, "utf-8");
 
   // Try to parse structured task file
-  const typeMatch = content.match(/^##?\s*Task\s*Type[:\s]+(\w+)/im);
-  const filesMatch = content.match(/^##?\s*Files[:\s]*([\s\S]*?)(?=^##|$)/im);
+  const typeMatch = content.match(/^##?\s*Task\s*Type[:\s]+([\w-]+)/im);
 
   let type: TaskType = "custom";
   if (typeMatch) {
@@ -124,15 +120,18 @@ async function loadTaskFile(path: string): Promise<{ type: TaskType; prompt: str
     else if (t === "plan_review" || t === "plan-review") type = "plan-review";
   }
 
-  let files: string[] | undefined;
-  if (filesMatch) {
-    files = filesMatch[1]
-      .split("\n")
-      .map((l) => l.replace(/^[-*]\s*/, "").trim())
-      .filter((l) => l && !l.startsWith("#"));
+  const files: string[] = [];
+  let inFiles = false;
+  for (const line of content.split(/\r?\n/)) {
+    const heading = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (heading) {
+      inFiles = /^Files\s*:?$/i.test(heading[1]);
+    } else if (inFiles && line.trim()) {
+      files.push(line.replace(/^\s*[-*]\s*/, "").trim());
+    }
   }
 
-  return { type, prompt: content, files };
+  return { type, prompt: content, files: files.length ? files : undefined };
 }
 
 async function main() {
@@ -149,7 +148,7 @@ async function main() {
       const task = await loadTaskFile(args.taskFile);
       args.type = task.type;
       args.prompt = task.prompt;
-      if (task.files) args.files = task.files;
+      args.files ??= task.files;
     } catch (err) {
       console.error(`Error reading task file: ${args.taskFile}`);
       process.exit(1);
@@ -166,7 +165,8 @@ async function main() {
     type: args.type,
     prompt: args.prompt,
     files: args.files,
-    cwd: process.cwd(),
+    cwd: args.cwd ?? process.cwd(),
+    mode: args.mode,
   };
 
   const options = {
@@ -181,6 +181,15 @@ async function main() {
     result = await runCodex(task, options);
   }
 
+  if (!args.stream && result.output) {
+    // Wait for a pipe to drain before exiting, including large buffered results.
+    await new Promise<void>((resolve, reject) => {
+      process.stdout.write(result.output, (error) => error ? reject(error) : resolve());
+    });
+  }
+  if (!result.success && result.error) {
+    console.error(result.error);
+  }
   process.exit(result.success ? 0 : 1);
 }
 

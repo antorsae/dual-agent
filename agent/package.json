@@ -1,7 +1,7 @@
 {
   "name": "codex-delegate",
-  "version": "0.1.0",
-  "description": "MCP servers for delegating tasks to Codex CLI and ChatGPT Pro",
+  "version": "0.3.0",
+  "description": "Bidirectional Claude and Codex delegation with persistent jobs, plus a ChatGPT Pro worker",
   "type": "module",
   "main": "dist/cli.js",
   "bin": {
@@ -12,6 +12,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "start": "node dist/cli.js",
     "mcp": "node dist/mcp.js",
+    "claude-mcp": "node dist/claudeMcp.js",
     "pro-mcp": "node dist/chatgptProMcp.js",
     "dev": "tsx src/cli.ts"
   },

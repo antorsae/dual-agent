@@ -6,7 +6,7 @@ node_modules/
 /agent/dist/
 *.tsbuildinfo
 
-# Agent collaboration runtime files (initialized by setup)
+# Legacy local data from older installations
 .agent-collab/
 
 # Local agent settings and browser state

@@ -1,415 +1,163 @@
 # Dual Agent Development Environment
 
-A collaborative development environment that pairs **Claude Code** (Anthropic) with **Codex CLI** and **ChatGPT Pro** (OpenAI), enabling you to leverage the strengths of multiple AI models. Both OpenAI sides use the model, reasoning effort, and speed set in `~/.codex/config.toml`.
-
-## Why Multiple Agents?
-
-| Claude Code (Primary) | Codex CLI | ChatGPT Pro |
-|-----------------------|-----------|----------------------|
-| Fast iteration & prototyping | Deep, thorough code review | Extended thinking for complex analysis |
-| Planning & orchestration | Complex algorithm implementation | Maximum context for large codebases |
-| Quick fixes & refactoring | Security vulnerability analysis | Second opinion on architecture |
-| Context switching & multitasking | Meticulous edge case handling | Long-running deep reviews (5-30 min) |
-
-By combining multiple models, you get rapid development velocity with rigorous quality checks and diverse perspectives.
-
-## Prerequisites
-
-- [tmux](https://github.com/tmux/tmux) - Terminal multiplexer
-- [Claude Code](https://github.com/anthropics/claude-code) - Anthropic's CLI
-- [Codex CLI](https://github.com/openai/codex) - OpenAI's CLI
-- [jq](https://stedolan.github.io/jq/) - JSON processor
-- [Node.js](https://nodejs.org) - For the MCP server
-
-```bash
-# macOS
-brew install tmux jq node
-
-# Claude Code & Codex CLI - follow their respective installation guides
-```
+Let **Claude Code delegate to Codex**, and **Codex delegate to Claude**, through MCP. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control. Optional integrations also let either agent use ChatGPT through a browser.
 
 ## Installation
 
+Install Node.js with npm, Claude Code, and Codex CLI. Authenticate both CLIs, then run:
+
 ```bash
-git clone https://github.com/antorsae/dual-agent.git
-cd dual-agent
 ./setup-dual-agent.sh
 ```
 
-This will:
-- Build the codex-delegate MCP server
-- Install Claude skills to `~/.claude/skills/`
-- Install Codex skills to `~/.codex/skills/`
-- Configure Claude Code with MCP server and permissions
-- Initialize the `.agent-collab/` directory
+Setup asks which integrations to install:
 
----
+| Choice | Integration |
+|--------|-------------|
+| 1 | Use Codex from Claude Code — MCP tools and skill |
+| 2 | Use Claude from Codex — MCP tools and skill |
+| 3 | Review with ChatGPT from Claude Code — Chrome integration |
+| 4 | Use the ChatGPT Pro worker from Codex |
+| 5 | Desktop notification support |
 
-## Four Ways to Use
+Toggle the choices you want, then press `c` to install. Select **1 and 2** for
+both delegation directions. Each delegation choice installs its MCP server registration
+and host skill; neither delegation direction depends on a browser integration.
 
-### Option 1: MCP Tools (Recommended)
-
-After running setup, Claude Code has Codex tools available directly. Just ask naturally:
-
-```
-You: Review src/auth.ts for security vulnerabilities using codex
-
-You: Have codex implement a rate limiter for the API
-
-You: Ask codex to review my migration plan
-```
-
-**Available MCP Tools:**
-
-| Tool | Description |
-|------|-------------|
-| `delegate_codex_review` | Code review (security, bugs, performance) |
-| `delegate_codex_implement` | Implement features with Codex |
-| `delegate_codex_plan_review` | Review implementation plans |
-| `delegate_codex` | Send any custom prompt to Codex |
-
-### Option 2: Tmux Dual-Pane
-
-For interactive side-by-side work with both agents visible:
-
-```bash
-./start-dual-agent.sh
-```
-
-This opens a split tmux session with Claude (left) and Codex (right).
-
-Chrome integration and `/chatgpt-code-review` are enabled in the launcher only
-when selected during setup (component 4). Selecting only the tmux skills
-(component 3) disables Chrome for future launches, even if the Chrome skill was
-installed previously. The choice is saved in
-`${XDG_CONFIG_HOME:-~/.config}/dual-agent/chrome-enabled`; without a saved choice,
-Chrome defaults to off. To enable it, rerun setup and select components 3 and 4.
-
-**Skills:**
-
-| Claude Skills | Codex Skills |
-|---------------|--------------|
-| `/codex-review` | `$read-task` |
-| `/codex-implement` | `$respond` |
-| `/codex-plan-review` | `$claude-status` |
-| `/codex-read` | |
-| `/codex-status` | |
-
-### Option 3: ChatGPT Code Review (Chrome)
-
-Use ChatGPT via Claude Code's Chrome integration for deep, extended-thinking code reviews, with the model settings from `~/.codex/config.toml`:
-
-```bash
-# Start Claude Code with Chrome integration
-claude --chrome
-```
-
-Then ask naturally:
-
-```
-You: Review src/auth.ts with ChatGPT
-
-You: Get ChatGPT to review this migration plan
-```
-
-**Prerequisites:**
-- Claude Code with `--chrome` flag
-- Claude in Chrome extension (v1.0.36+)
-- Logged into chat.com with ChatGPT Pro subscription
-
-**Workflow:**
-1. Claude submits the code review request to ChatGPT
-2. Returns immediately (non-blocking) - high-effort reviews can take 5-30 minutes
-3. Ask Claude to "fetch ChatGPT results" when ready
-
-**Skill:** `/chatgpt-code-review`
-
-### Option 4: ChatGPT Pro Worker for Codex
-
-Use ChatGPT as an external worker for arbitrary Codex tasks: implementation, debugging, refactoring, planning, review, or custom analysis. The worker can automate ChatGPT through Playwright using a persistent Chromium profile.
-
-Install only this component:
-
-```bash
-./setup-dual-agent.sh --pro-worker
-```
-
-Then restart Codex and ask:
-
-```
-$chatgpt-pro-worker implement rate limiting for the API and return an apply-ready patch
-
-$chatgpt-pro-worker debug this failing test and ask ChatGPT for a unified diff
-```
-
-**Workflow:**
-1. Codex gathers repo context and calls the `chatgpt-pro-worker` MCP server.
-2. The MCP server opens ChatGPT in Playwright Chromium, selects the model, reasoning effort, and speed from `~/.codex/config.toml` (`model`, `model_reasoning_effort`, `service_tier`) when ChatGPT offers them, submits the prompt, waits for the answer, and saves the response.
-3. Codex reads the saved result, applies patches when appropriate, and runs verification.
-
-**Login bootstrap:**
-
-The automated worker uses a persistent Chromium profile at `~/.codex/chatgpt-pro-worker/browser-profile`. You must log in to ChatGPT Pro once in that profile.
+Restart Claude Code and Codex to discover the tools and their companion skills. You can describe the work normally:
 
 ```text
-open_pro_login
-login_status
+Get an independent review of this authentication change.
+Have Claude critique the migration plan.
+Ask Codex to implement this bounded API change.
 ```
 
-On a headless machine with no browser/display, first login cannot be completed purely in the terminal because ChatGPT login may require interactive browser UI, CAPTCHA, passkey, or 2FA. Use one of these:
+The MCP tools accept a different prompt on every call. The installed skills guide each host to use the other model for useful independent reviews and bounded tasks, then collect and check the result. Tool selection remains the host agent's decision; no fixed shell prompt or terminal pane is needed.
 
-- Run the Pro worker once on a workstation with a desktop browser, log in, then keep using it there.
-- Use SSH X forwarding or VNC/noVNC on the headless host, then call `open_pro_login` with `headless=false`.
-- Copy a compatible already-authenticated Chromium profile into `~/.codex/chatgpt-pro-worker/browser-profile`.
-
-After login, headless automation can run on the host.
-
-**Available MCP Tools:**
-
-| Tool | Description |
-|------|-------------|
-| `login_status` | Check whether the persistent ChatGPT profile is logged in |
-| `open_pro_login` | Open ChatGPT for one-time login in the persistent profile |
-| `submit_pro_task` | Submit an arbitrary Pro task through automated Playwright Chromium |
-| `await_pro_task` | Wait for an automated task result |
-| `save_pro_result` | Save the completed ChatGPT Pro response |
-| `get_pro_task` | Read job status and saved result |
-| `show_pro_prompt` | Show the prepared Pro prompt |
-| `list_pro_tasks` | List recent Pro jobs |
-
----
-
-## Quick Start
-
-### MCP Tools (Simplest)
+Setup prefers `codex-pool` for Codex work, falling back to `codex`. Override the executables when needed:
 
 ```bash
-# 1. Run setup
-./setup-dual-agent.sh
-
-# 2. Restart Claude Code to load MCP tools
-claude
-
-# 3. Use naturally
-> Review src/auth.ts for security issues using codex
+CODEX_BIN=/absolute/path/to/codex CLAUDE_BIN=/absolute/path/to/claude ./setup-dual-agent.sh
 ```
 
-### Tmux Dual-Pane
+Each worker uses its own CLI authentication and model configuration. The Claude worker keeps subscription authentication available and does not use `--bare`.
 
-```bash
-# 1. Run setup
-./setup-dual-agent.sh
+## MCP tools
 
-# 2. Start dual-agent environment
-./start-dual-agent.sh
+| Task | From Claude Code | From Codex |
+|------|------------------|------------|
+| Code review | `delegate_codex_review` | `delegate_claude_review` |
+| Implementation | `delegate_codex_implement` | `delegate_claude_implement` |
+| Plan review | `delegate_codex_plan_review` | `delegate_claude_plan_review` |
+| Custom task | `delegate_codex` | `delegate_claude` |
+| Status and result | `delegate_codex_status` | `delegate_claude_status` |
+| Recent jobs | `delegate_codex_list` | `delegate_claude_list` |
+| Cancellation | `delegate_codex_cancel` | `delegate_claude_cancel` |
 
-# 3. In Claude pane, use skills
-> /codex-review
-```
+Delegation inputs are `prompt` (or `plan` for plan review), `cwd`, optional `files`, optional `mode`, `wait`, and `timeout_ms`. `files` accepts an array or a comma-separated string.
 
----
+`cwd` must be an absolute project directory. The Claude host can supply it through `CLAUDE_PROJECT_DIR` when omitted. Codex callers should pass it explicitly. Both the canonical project path and the workspace used for locking are returned with the job.
 
-## Detailed Example: Security Review
-
-### Using MCP Tools
-
-````
-You: I just implemented authentication. Review src/auth.ts using codex
-     for security vulnerabilities.
-
-Claude: I'll use the delegate_codex_review tool to have Codex analyze this file...
-
-[Claude calls delegate_codex_review tool]
-
-Claude: Codex found the following issues:
-
-## Critical Issues
-
-1. **SQL Injection (Line 45)**
-   The query uses string concatenation instead of parameterized queries.
-
-   Fix:
-   ```python
-   cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-   ```
-
-2. **Weak Password Hashing (Line 78)**
-   Using MD5 instead of bcrypt/argon2.
-
-...
-````
-
-### Using Tmux Dual-Pane
-
-```
-[Claude Pane]
-You: Review src/auth.ts for security issues
-
-Claude: I'll delegate this to Codex for a thorough security review.
-        Delegating to Codex...
-
-[Codex Pane - automatically receives task]
-Codex: Reading task from Claude...
-       Analyzing src/auth.ts for security vulnerabilities...
-       [Deep analysis]
-       Response ready.
-
-[Claude Pane - automatically reads response]
-Claude: Codex completed the review. Here are the findings:
-        [Presents Codex's analysis]
-```
-
----
-
-## Architecture
-
-```text
-+-----------------------------------------------------------------------------------+
-|                                    Claude Code                                    |
-|                                                                                   |
-|+-----------------------+  +-----------------------+  +---------------------------+|
-||       MCP Tools       |  |     Skills (tmux)     |  |      Skills (Chrome)      ||
-||   delegate_codex_*    |  |     /codex-review     |  |   /chatgpt-code-review    ||
-|+-----------+-----------+  +-----------+-----------+  +-------------+-------------+|
-+------------+--------------------------+----------------------------+--------------+
-             |                          |                            |
-             v                          v                            v
- +-----------------------+  +-----------------------+  +---------------------------+
- |    codex-delegate     |  |    .agent-collab/     |  |     Chrome + chat.com     |
- |      MCP Server       |  |   (file-based IPC)    |  |   (browser automation)    |
- |                       |  |                       |  |                           |
- |   Spawns codex-pool   |  |   requests/task.md    |  |   JavaScript injection    |
- +-----------+-----------+  +-----------+-----------+  +-------------+-------------+
-             |                          |                            |
-             v                          v                            v
- +-----------+--------------------------+-----------+  +-------------+-------------+
- |                    Codex CLI                     |  |        ChatGPT Pro        |
- |                                                  |  |                           |
- |        Deep code review & Implementation         |  | Extended thinking (5-30m) |
- |         Security analysis & Plan review          |  | Maximum context + analysis |
- +--------------------------------------------------+  +---------------------------+
-```
-
----
-
-## Configuration
-
-### Shared Context
-
-Edit `.agent-collab/context/shared.md` to provide both agents with project context:
-
-```markdown
-# Shared Project Context
-
-## Project Overview
-E-commerce platform using FastAPI + Redis + PostgreSQL
-
-## Architecture Decisions
-- All auth uses JWT with refresh rotation
-- Redis for rate limiting and session storage
-
-## Conventions
-- Type hints required on all functions
-- Pydantic models for all API schemas
-```
-
-### Claude Settings
-
-The setup script configures `~/.claude/settings.json` with:
+Review, plan-review, and custom tasks default to **read-only**. Implementation defaults to **edit**. A custom editing task must explicitly select `mode: "edit"`.
 
 ```json
 {
-  "mcpServers": {
-    "codex-delegate": {
-      "command": "node",
-      "args": ["/path/to/dual-agent/agent/dist/mcp.js"]
-    }
-  },
-  "permissions": {
-    "allow": [
-      "Bash(cat .agent-collab:*)",
-      "Bash(tmux send-keys:*)",
-      ...
-    ]
-  }
+  "prompt": "Review authentication error handling and report concrete defects",
+  "cwd": "/absolute/path/to/project",
+  "files": ["src/auth.ts"],
+  "mode": "read-only"
 }
 ```
 
----
+## Results, waiting, and cancellation
 
-## Tmux Key Bindings
+A call returns a persistent task ID immediately by default. Continue with the corresponding status tool:
 
-| Keys | Action |
-|------|--------|
-| `Ctrl-b ←/→` | Switch between Claude and Codex panes |
-| `Ctrl-b d` | Detach from session |
-| `Ctrl-b z` | Zoom current pane (fullscreen toggle) |
+```json
+{
+  "task_id": "the-returned-uuid",
+  "wait_ms": 30000
+}
+```
 
----
+The status call waits up to 30 seconds, returning sooner when the job finishes. This works within ordinary MCP request timeouts and avoids rapid polling. `wait: true` on the original delegation call is also available for short tasks; long tasks should use background submission and bounded status waits.
 
-## Troubleshooting
+Tasks time out after two hours by default. `timeout_ms` overrides this. The cancel tool accepts `task_id` and can request cancellation from another live instance of the same provider's server. Cancellation stops the worker process group and retains diagnostics.
 
-### MCP tools not available
+Jobs live under `~/.local/state/dual-agent/jobs/<uuid>/`. `XDG_STATE_HOME` changes the state base; `DUAL_AGENT_STATE_DIR` overrides the complete `dual-agent` directory. Setup persists the same absolute state path in both MCP registrations so they share results and locks.
 
-1. Check the setup completed successfully:
-   ```bash
-   cat ~/.claude/settings.json | jq '.mcpServers'
-   ```
+Each job saves `job.json`, `result.md`, `stdout.log`, and `stderr.log`. Completed results survive server restart. Tool responses include file paths and a bounded excerpt of large answers; the full result remains on disk. Closing a server interrupts its unfinished jobs. An unexpected crash is reconciled on status/list access; tasks are not automatically retried.
 
-2. Restart Claude Code:
-   ```bash
-   claude
-   ```
+## Workspace behavior
 
-### Codex not receiving tasks (tmux mode)
+Only one delegated editing job can own a workspace at a time, across both providers and server instances. Git projects lock the worktree root, so subdirectories and symlink aliases share the same lock. Non-Git projects lock the specified canonical directory.
 
-1. Check tmux pane numbers: `tmux list-panes`
-2. Ensure Codex is running in pane 1
-3. Manually trigger: `tmux send-keys -t 1 '$read-task' Enter`
+A conflicting edit is rejected with the active task ID. The host agent should also stop editing that workspace while its worker edits it. The lock cannot prevent changes by an unrelated editor. Use a separate Git worktree explicitly when parallel editing is necessary.
 
-### Status stuck (tmux mode)
+Codex reviews run in its read-only sandbox with approval escalation disabled. Claude reviews receive only `Read`, `Glob`, and `Grep` tools. Claude edits use automatic permission review; unavailable permissions or denied tool calls produce a failed job with the available result for inspection. Claude's read-only mode is a tool restriction, not an additional operating-system sandbox around its startup hooks or extensions.
+
+Workers are told to complete their assigned task themselves. Claude workers load no configured MCP servers; Codex workers disable the two delegation servers to avoid recursive handoffs. Project guidance continues to use the native `AGENTS.md` and `CLAUDE.md` conventions.
+
+`.agent-collab` is retired. Existing files stay ignored as legacy data, but the runtime does not read, initialize, or overwrite them. See [DELEGATION_DESIGN.md](DELEGATION_DESIGN.md) for lifecycle and recovery details.
+
+## Unattended installation
+
+These explicit options skip the interactive questions:
+
+| Option | Installs |
+|--------|----------|
+| `--both` | Both delegation MCP servers and their host skills |
+| `--codex-mcp` (or `--mcp`) | Codex delegation for Claude Code |
+| `--claude-mcp` | Claude delegation for Codex |
+| `--pro-worker` | ChatGPT Pro browser worker for Codex |
+| `--all` | All integrations and notification dependencies |
+
+Build, browser installation, and registration errors stop setup with the underlying diagnostic. Setup does not write project context or `.gitignore` files.
+
+## Optional browser integrations
+
+Select component 3 and start `claude --chrome` to use `/chatgpt-code-review`. This requires the Claude in Chrome extension and a signed-in ChatGPT browser session. Known limitation: this legacy browser skill's JSON injection snippet can throw on ordinary prompt text.
+
+For Codex's Playwright worker, install `--pro-worker`, restart Codex, and use `$chatgpt-pro-worker`. Call `open_pro_login` once and complete login in the persistent profile at `~/.codex/chatgpt-pro-worker/browser-profile`, then call `login_status`. First login requires a desktop display, SSH X forwarding, or VNC.
+
+The browser integrations attempt to select the model, reasoning effort, and speed from `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`). Selection is best effort; inspect the job's `Automation` field. This browser worker retains its separate existing job storage.
+
+## Standalone Codex CLI
 
 ```bash
-echo "idle" > .agent-collab/status
+CODEX_BIN=codex node /FULL/PATH/TO/agent/dist/cli.js review "Check auth" --cwd /path/to/project --files src/auth.ts --output review.md
+CODEX_BIN=codex node /FULL/PATH/TO/agent/dist/cli.js custom "Implement the agreed fix" --cwd /path/to/project --mode edit
 ```
 
-### Codex not working
+This CLI shares the delegation job store and edit locks. Its default timeout is five minutes. Options work before or after the prompt; `--file` accepts a Markdown task, `--output` saves a Markdown response, and `--no-stream` buffers diagnostics while printing the final answer at completion. `--help` lists the options.
+
+## Troubleshooting and removal
 
 ```bash
-# Verify codex is installed and authenticated
-codex "hello"
-
-# MCP tools run codex-pool (or $CODEX_BIN)
-codex-pool exec "hello"
+claude mcp get codex-delegate
+codex mcp get claude-delegate
 ```
 
----
+Claude's user-scope registration is managed in `~/.claude.json`; Codex's is in its config directory. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).
 
-## Project Structure
+For a blocked edit, inspect the active job and cancel it if appropriate. After an interrupted process, inspect existing changes before retrying. The lock remains if a worker might still be alive or its termination is unknown; recovery does not kill processes based on stored PIDs. Corrupt locks and interrupted lock recovery require inspection rather than automatic deletion.
 
-```
-dual-agent/
-├── agent/                    # MCP server & CLI
-│   ├── src/
-│   │   ├── mcp.ts           # Claude MCP server (delegate_codex_* tools)
-│   │   ├── chatgptProMcp.ts # Codex MCP server (ChatGPT Pro worker)
-│   │   ├── cli.ts           # CLI wrapper
-│   │   └── codex.ts         # Codex subprocess spawner
-│   └── dist/                # Compiled JS
-├── .claude/skills/          # Claude Code skills
-│   ├── codex-review/        # /codex-review (tmux mode)
-│   ├── codex-implement/     # /codex-implement (tmux mode)
-│   ├── codex-plan-review/   # /codex-plan-review (tmux mode)
-│   ├── codex-read/          # /codex-read (tmux mode)
-│   ├── codex-status/        # /codex-status (tmux mode)
-│   └── chatgpt-code-review/ # /chatgpt-code-review (Chrome)
-├── .codex/skills/           # Codex CLI skills, including chatgpt-pro-worker
-├── setup-dual-agent.sh      # Setup script
-├── start-dual-agent.sh      # Tmux launcher
-└── README.md
+```bash
+./uninstall-dual-agent.sh
 ```
 
----
+Uninstall removes both delegation registrations, the optional Pro worker registration, installed skills, and legacy terminal settings. It preserves project files, saved job data, and browser profiles.
+
+## Development
+
+```bash
+cd agent
+npm ci
+npx playwright install chromium
+npm test
+```
+
+Tests use fake agent executables, temporary state directories, and local browser pages. They do not submit model requests or alter actual MCP registrations. Generated dependencies and build output are ignored by Git.
 
 ## License
 
