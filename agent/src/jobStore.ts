@@ -109,7 +109,7 @@ export class JobStore {
     let job: Job;
     try { job = JSON.parse(await readFile(this.file(id, "job.json"), "utf8")); }
     catch (error) { if (missing(error)) throw new Error(`Task not found: ${id}`); throw error; }
-    if (job.version !== 1 || job.id !== id || !["codex", "claude"].includes(job.provider) ||
+    if (job.version !== 1 || job.id !== id || !["codex", "claude", "rosalind"].includes(job.provider) ||
         !["running", "completed", "failed", "cancelled", "interrupted"].includes(job.status) ||
         typeof job.workspace !== "string" || !job.owner || !Number.isSafeInteger(job.owner.pid) || job.owner.pid <= 0 ||
         (job.child && (!Number.isSafeInteger(job.child.pid) || job.child.pid <= 0))) {

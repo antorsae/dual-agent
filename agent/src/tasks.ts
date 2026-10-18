@@ -1,4 +1,5 @@
-export type Provider = "codex" | "claude";
+export type Provider = "codex" | "claude" | "rosalind";
+export type CodexProvider = "codex" | "rosalind";
 export type TaskType = "review" | "implement" | "plan-review" | "custom";
 export type ExecutionMode = "read-only" | "edit";
 export type JobStatus = "running" | "completed" | "failed" | "cancelled" | "interrupted";
@@ -45,6 +46,11 @@ export interface Job {
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 export const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const isFinished = (job: Job): boolean => job.status !== "running";
+export const isCodexProvider = (provider: Provider): provider is CodexProvider => provider === "codex" || provider === "rosalind";
+
+export function providerLabel(provider: Provider): string {
+  return provider === "claude" ? "Claude" : provider === "rosalind" ? "Rosalind" : "Codex";
+}
 
 export function buildPrompt(task: Pick<Job, "type" | "prompt" | "files" | "mode">): string {
   const instructions: Record<TaskType, string> = {

@@ -3,7 +3,7 @@ import { createWriteStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
-import { Job, buildPrompt, ProcessIdentity } from "./tasks.js";
+import { isCodexProvider, Job, buildPrompt, ProcessIdentity, providerLabel } from "./tasks.js";
 import { JobStore, processIdentity } from "./jobStore.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,17 +17,19 @@ export interface RunResult {
 }
 
 export function commandFor(job: Job, store: JobStore): { command: string; args: string[] } {
-  if (job.provider === "codex") {
+  if (isCodexProvider(job.provider)) {
     return {
       command: process.env.CODEX_BIN || "codex-pool",
-      args: ["exec", ...(job.mode === "edit" ? ["--approve-for-me"] : ["--sandbox", "read-only", "-c", 'approval_policy="never"']),
+      args: ["exec", ...(job.provider === "rosalind" ? ["-p", "rosalind_delegate"] : []),
+        ...(job.mode === "edit" ? ["--approve-for-me"] : ["--sandbox", "read-only", "-c", 'approval_policy="never"']),
         // The host selected this project; allow non-Git directories without
         // changing the job's sandbox or approval policy.
         "--skip-git-repo-check",
         "--json", "--output-last-message", store.file(job.id, "answer.tmp"),
         // Complete disabled entries also work when these servers aren't registered.
         "-c", 'mcp_servers.claude-delegate={command="node",args=[],enabled=false}',
-        "-c", 'mcp_servers.codex-delegate={command="node",args=[],enabled=false}', "-"],
+        "-c", 'mcp_servers.codex-delegate={command="node",args=[],enabled=false}',
+        "-c", 'mcp_servers.rosalind-delegate={command="node",args=[],enabled=false}', "-"],
     };
   }
   return {
@@ -79,7 +81,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
 
   let sessionId: string | undefined;
   let pendingLine = "";
-  if (job.provider === "codex") {
+  if (isCodexProvider(job.provider)) {
     proc.stdout.on("data", chunk => {
       pendingLine += chunk.toString();
       const lines = pendingLine.split("\n");
@@ -114,7 +116,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
   let output = "";
   if (!problem) {
     try {
-      if (job.provider === "codex") {
+      if (isCodexProvider(job.provider)) {
         output = await readFile(store.file(job.id, "answer.tmp"), "utf8").catch(error => {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
           throw error;
@@ -134,8 +136,8 @@ export async function runProvider(job: Job, store: JobStore, options: {
       }
     } catch (error) { problem = error instanceof Error ? error : new Error(String(error)); }
   }
-  if (!problem && code !== 0) problem = new Error(`${job.provider === "codex" ? "Codex" : "Claude"} exited with code ${code}`);
-  if (!problem && !output.trim()) problem = new Error(`${job.provider} exited without a final answer; see stdout.log and stderr.log.`);
+  if (!problem && code !== 0) problem = new Error(`${providerLabel(job.provider)} exited with code ${code}`);
+  if (!problem && !output.trim()) problem = new Error(`${providerLabel(job.provider)} exited without a final answer; see stdout.log and stderr.log.`);
   if (!cleanupConfirmed) problem = new Error("Worker process cleanup could not be confirmed; the edit lock is retained.");
   return { output, sessionId, exitCode: code, error: problem?.message, cleanupConfirmed };
 }

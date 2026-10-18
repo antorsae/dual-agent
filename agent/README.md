@@ -11,10 +11,10 @@ npm run build
 
 Run the repository's `./setup-dual-agent.sh` to choose integrations interactively.
 Choice 1 installs Codex delegation for Claude Code; choice 2 installs Claude
-delegation for Codex. Each includes the MCP registration and companion host
-skill. Select both choices to install both directions, or use `--both` for an
-unattended installation. For manual registration, use the same absolute state
-directory in both commands:
+delegation for Codex; choice 3 installs Rosalind delegation for both hosts.
+Each includes the MCP registration and companion host skill. Select the choices
+you need, or use `--both` for the two original directions. For manual
+registration, use the same absolute state directory in all commands:
 
 ```bash
 claude mcp add --scope user codex-delegate \
@@ -26,13 +26,33 @@ codex mcp add claude-delegate \
   --env CLAUDE_BIN=/absolute/path/to/claude \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/claudeMcp.js
+
+claude mcp add --scope user rosalind-delegate \
+  --env CODEX_BIN=codex-pool \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  -- node /FULL/PATH/TO/agent/dist/rosalindMcp.js
+
+codex mcp add rosalind-delegate \
+  --env CODEX_BIN=codex-pool \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  -- node /FULL/PATH/TO/agent/dist/rosalindCodexMcp.js
 ```
 
-Restart the hosts to discover the tools. `npm run mcp` and `npm run claude-mcp` are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for the Codex worker, and `CLAUDE_CONFIG_DIR` for the Claude worker when configured.
+Restart the hosts to discover the tools. `npm run mcp`, `npm run claude-mcp`,
+`npm run rosalind-mcp`, and `npm run rosalind-codex-mcp` are the corresponding
+stdio entrypoints. Setup also persists `CODEX_HOME` for the Codex worker, and
+`CLAUDE_CONFIG_DIR` for the Claude worker when configured.
+
+Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
+`~/.codex/rosalind_delegate.config.toml`). Setup validates the existing profile
+and never creates or overwrites it. Pass `--verify-rosalind-profile` to run one
+live Codex request through the profile during setup.
 
 ## Tool contract
 
-The prefix is `delegate_codex` or `delegate_claude`:
+The prefix is `delegate_codex`, `delegate_claude`, or `delegate_rosalind`:
 
 | Suffix | Inputs |
 |--------|--------|
@@ -68,6 +88,8 @@ interactive Claude Code session with:
 claude --dangerously-load-development-channels server:codex-delegate
 ```
 
+Use `server:rosalind-delegate` for Rosalind's completion channel.
+
 Accept the local-development confirmation at startup. The development flag is
 ignored with `-p` or the Agent SDK. Channels require claude.ai or Console API-key
 authentication; Bedrock, Vertex, and Foundry are unsupported. Team/Enterprise
@@ -80,6 +102,10 @@ the result when notified. Otherwise, keep using status calls with
 enabled or received its channel events. The reverse `claude-delegate` server
 uses status waits; it does not advertise Claude's channel capability to Codex.
 
+The Claude-hosted `rosalind-delegate` server uses the same channel behavior with
+`delegate_rosalind_status`. Its Codex-hosted registration uses bounded status
+waits and does not advertise the Claude channel capability.
+
 Events carry `task_id`, `task_type`, `status`, and `duration`. They describe
 `completed`, `failed`, `cancelled`, or `interrupted` jobs using the same persisted
 job state as the status tool. Notification delivery is best effort: a closed
@@ -87,15 +113,11 @@ connection or crash can prevent an event, and old events are not replayed after
 restart. Recover those results with the status/list tools. A result already
 collected through a waiting call does not need to be presented again.
 
-Desktop notifications remain available for both providers. Set
-`DUAL_AGENT_NOTIFICATIONS=0` on the server to disable desktop notifications;
-this does not disable channel events.
-
 ## Worker behavior
 
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
-- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Both delegation MCP servers are disabled in the child invocation.
+- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`. All delegation MCP servers are disabled in the child invocation.
 - Claude: `--print --output-format json`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk`. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate
@@ -107,7 +129,7 @@ Stdout and stderr are logged separately from the final answer. Codex uses its fi
 
 ## State and locks
 
-Default state is `~/.local/state/dual-agent`, honoring `XDG_STATE_HOME`, or the complete `DUAL_AGENT_STATE_DIR` override. Use a local directory shared by both registrations. Each job stores `job.json`, `result.md`, `stdout.log`, and `stderr.log`; cancellation requests and Codex's final-message staging file are internal job files.
+Default state is `~/.local/state/dual-agent`, honoring `XDG_STATE_HOME`, or the complete `DUAL_AGENT_STATE_DIR` override. Use a local directory shared by all registrations. Each job stores `job.json`, `result.md`, `stdout.log`, and `stderr.log`; cancellation requests and Codex's final-message staging file are internal job files.
 
 Metadata updates are atomic. Editing locks are exclusive and keyed to the canonical Git worktree root, or the explicit directory for a non-Git project. A rejected concurrent edit returns the active job ID. Locks coordinate these workers, not unrelated host/editor writes.
 
@@ -127,19 +149,10 @@ The CLI shares job persistence and locking. `--cwd` defaults to the shell's curr
 
 Task files may include `## Task Type` and `## Files`; see [examples/task.md](examples/task.md). Explicit `--files` takes precedence over a file list in the task file.
 
-## Optional ChatGPT Pro worker
-
-The separate `chatgptProMcp.ts` entrypoint prepares and runs tasks in ChatGPT through Playwright Chromium. It retains its existing storage at `~/.codex/chatgpt-pro-worker/` and its persistent browser profile. Install with `./setup-dual-agent.sh --pro-worker`.
-
-Tools: `login_status`, `open_pro_login`, `submit_pro_task`, `await_pro_task`, `save_pro_result`, `get_pro_task`, `show_pro_prompt`, `list_pro_tasks`.
-
-The worker reads model, reasoning effort, and speed from `$CODEX_HOME/config.toml`. Selection is best effort; inspect the `Automation` field and picker screenshots. First login requires an interactive browser. Codex inspects, applies, and tests any generated patch.
-
 ## Tests
 
 ```bash
-npx playwright install chromium
 npm test
 ```
 
-The suite covers both MCP servers, persistence, cancellation/process cleanup, locking, validation, CLI behavior, installer/uninstaller behavior, and browser model selection. Agent tests use fake executables; browser tests use local pages. Installer tests require Bash and jq; workspace tests require Git.
+The suite covers all delegation servers, persistence, cancellation/process cleanup, locking, validation, CLI behavior, and installer/uninstaller behavior. Agent tests use fake executables. Installer tests require Bash and jq; workspace tests require Git.

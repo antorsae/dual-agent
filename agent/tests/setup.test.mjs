@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-const settingsModule = new URL("../dist/chatgptSettings.js", import.meta.url).href;
 const codexModule = new URL("../dist/codex.js", import.meta.url).href;
 
 async function fixture(t, missingBinaries = []) {
@@ -15,21 +14,23 @@ async function fixture(t, missingBinaries = []) {
   const bin = join(dir, "bin");
   const log = join(dir, "calls.jsonl");
   await Promise.all([
-    mkdir(bin), mkdir(testHome), mkdir(join(dir, "agent", "dist"), { recursive: true }),
+    mkdir(bin), mkdir(testHome), mkdir(join(testHome, ".codex"), { recursive: true }), mkdir(join(dir, "agent", "dist"), { recursive: true }),
   ]);
+  await writeFile(join(testHome, ".codex/rosalind_delegate.config.toml"), 'model = "fixture-rosalind"\n');
   for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh"]) {
     const source = await readFile(new URL("../../" + script, import.meta.url), "utf8");
     // Redirect managed files without changing the process HOME.
     await writeFile(join(dir, script), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
   }
-  for (const [role, skill] of [[".claude", "chatgpt-code-review"], [".codex", "chatgpt-pro-worker"], [".claude", "codex-delegate"], [".codex", "claude-delegate"]]) {
+  for (const [role, skill] of [[".claude", "codex-delegate"], [".codex", "claude-delegate"], [".claude", "rosalind-delegate"], [".codex", "rosalind-delegate"]]) {
     const path = join(dir, role, "skills", skill);
     await mkdir(path, { recursive: true });
     await writeFile(join(path, "SKILL.md"), skill + " fixture");
   }
   await writeFile(join(dir, "agent", "dist", "mcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "claudeMcp.js"), "");
-  await writeFile(join(dir, "agent", "dist", "chatgptProMcp.js"), "");
+  await writeFile(join(dir, "agent", "dist", "rosalindMcp.js"), "");
+  await writeFile(join(dir, "agent", "dist", "rosalindCodexMcp.js"), "");
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
   await writeFile(log, "");
   await symlink(process.execPath, join(bin, "node"));
@@ -47,10 +48,10 @@ async function fixture(t, missingBinaries = []) {
     'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args }) + "\\n");',
     'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
-    'if (name.startsWith("custom codex")) { process.stdin.resume(); process.stdin.on("end", () => { fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "custom executable"); }); }',
+    'if (name.startsWith("custom codex")) { process.stdin.resume(); process.stdin.on("end", () => { if (args.includes("--output-last-message")) fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "custom executable"); }); }',
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
-  for (const file of ["claude", "codex", "codex-pool", "npm", "npx", "notify-send", "custom codex $'quoted"]) {
+  for (const file of ["claude", "codex", "codex-pool", "npm", "custom codex $'quoted"]) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
@@ -143,37 +144,11 @@ test("does not replace an unavailable custom CODEX_BIN", async (t) => {
   assert.deepEqual(calls, []);
 });
 
-test("passes a custom CODEX_HOME to the worker and installs its skill there", async (t) => {
+test("registers all delegation integrations from the component menu", async (t) => {
   const f = await fixture(t);
-  const configDir = join(f.dir, "custom codex config");
-  await mkdir(configDir);
-  await writeFile(join(configDir, "config.toml"), 'model = "gpt-6-astra"\nmodel_reasoning_effort = "low"\nservice_tier = "ultrafast"\n');
-  const { calls } = await f.run(["--pro-worker"], "", { CODEX_HOME: configDir });
-  const saved = registrationEnv(calls, "codex");
-  assert.equal(saved.CODEX_HOME, configDir);
-  const settings = runNode(
-    "import { loadChatGptSettings } from " + JSON.stringify(settingsModule) + ";console.log(JSON.stringify(await loadChatGptSettings()));",
-    { ...f.env, ...saved }
-  );
-  assert.equal(settings.model.value, "gpt-6-astra");
-  assert.equal(settings.effort.value, "low");
-  assert.equal(settings.speed.value, "ultrafast");
-  assert.equal(await readFile(join(configDir, "skills/chatgpt-pro-worker/SKILL.md"), "utf8"), "chatgpt-pro-worker fixture");
-});
-
-test("registers Codex delegation and the Pro worker from the component menu", async (t) => {
-  const f = await fixture(t);
-  const { calls } = await f.run([], "14c");
+  const { calls } = await f.run([], "123c");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
-});
-
-test("Chrome-only setup installs its skill without a launcher preference", async (t) => {
-  const f = await fixture(t, ["codex", "codex-pool", "npm"]);
-  const { calls } = await f.run([], "3c");
-  assert.equal(await readFile(join(f.testHome, ".claude/skills/chatgpt-code-review/SKILL.md"), "utf8"), "chatgpt-code-review fixture");
-  await assert.rejects(access(join(f.testHome, ".config/dual-agent/chrome-enabled")), { code: "ENOENT" });
-  assert.deepEqual(calls, []);
 });
 
 test("repeated setup preserves project data and Claude settings", async (t) => {
@@ -188,20 +163,11 @@ test("repeated setup preserves project data and Claude settings", async (t) => {
   for (const path of paths) assert.equal(await readFile(path, "utf8"), "user data to preserve");
 });
 
-for (const command of ["npm", "npx"]) {
-  test(`${command} failures stop setup and retain diagnostics`, async (t) => {
+test("npm failures stop setup and retain diagnostics", async (t) => {
     const f = await fixture(t);
-    const { output } = await f.run(["--pro-worker"], "", { DUAL_AGENT_TEST_FAIL_COMMAND: command }, 1);
+    const { output } = await f.run(["--codex-mcp"], "", { DUAL_AGENT_TEST_FAIL_COMMAND: "npm" }, 1);
     assert.match(output, /fixture command failed/);
     assert.doesNotMatch(output, /Setup Complete/);
-  });
-}
-
-test("Pro worker registration failures stop setup", async (t) => {
-  const f = await fixture(t);
-  const { output } = await f.run(["--pro-worker"], "", { DUAL_AGENT_TEST_FAIL_REGISTER: "codex" }, 1);
-  assert.match(output, /Could not register chatgpt-pro-worker/);
-  assert.doesNotMatch(output, /Setup Complete/);
 });
 
 test("missing build output stops setup before registration", async (t) => {
@@ -228,6 +194,15 @@ test("uninstall removes legacy skills and permissions while preserving saved dat
   assert.deepEqual(JSON.parse(await readFile(settings, "utf8")), { permissions: { allow: ["Read"] }, unrelated: true });
   assert.equal(await readFile(saved, "utf8"), "saved context");
   assert.equal(await readFile(join(f.dir, ".gitignore"), "utf8"), ".agent-collab/\n");
+});
+
+test("uninstall removes Rosalind registrations and host skills", async (t) => {
+  const f = await fixture(t);
+  const { calls } = await f.uninstall();
+  assert.ok(calls.some(call => call.name === "claude" && call.args.includes("rosalind-delegate")));
+  assert.ok(calls.some(call => call.name === "codex" && call.args.includes("rosalind-delegate")));
+  await assert.rejects(access(join(f.testHome, ".claude/skills/rosalind-delegate")), { code: "ENOENT" });
+  await assert.rejects(access(join(f.testHome, ".codex/skills/rosalind-delegate")), { code: "ENOENT" });
 });
 
 test("uninstall tolerates Claude settings with no permissions", async (t) => {
@@ -276,16 +251,15 @@ test("reverse registration failure stops setup", async (t) => {
 });
 
 test("interactive Claude selection installs its MCP server and host skill independently", async (t) => {
-  const f = await fixture(t, ["codex-pool", "npx"]);
+  const f = await fixture(t, ["codex-pool"]);
   const { calls, output } = await f.run([], "2c");
-  assert.match(output, /2\) \[1\] Use Claude from Codex/);
+  assert.match(output, /2\) \[x\] Use Claude from Codex/);
   const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
   assert.equal(registrations.length, 1);
   assert.equal(registrations[0].name, "codex");
   assert.equal(registrations[0].args[2], "claude-delegate");
   assert.equal(await readFile(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"), "utf8"), "claude-delegate fixture");
   await assert.rejects(access(join(f.testHome, ".claude/skills/codex-delegate")), { code: "ENOENT" });
-  assert.ok(!calls.some(call => call.name === "npx"));
 });
 
 test("interactive selection can install both delegation directions", async (t) => {
@@ -309,11 +283,9 @@ test("select all includes Claude delegation with the other integrations", async 
   const f = await fixture(t);
   const { calls } = await f.run([], "ac");
   const codexServers = calls.filter(call => call.name === "codex" && call.args[1] === "add").map(call => call.args[2]);
-  assert.deepEqual(codexServers.sort(), ["chatgpt-pro-worker", "claude-delegate"]);
+  assert.deepEqual(codexServers.sort(), ["claude-delegate", "rosalind-delegate"]);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   await access(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"));
-  await access(join(f.testHome, ".codex/skills/chatgpt-pro-worker/SKILL.md"));
-  await access(join(f.testHome, ".claude/skills/chatgpt-code-review/SKILL.md"));
 });
 
 test("explicit Codex flag installs the same integration as the legacy alias", async (t) => {
@@ -321,4 +293,30 @@ test("explicit Codex flag installs the same integration as the legacy alias", as
   const { calls } = await f.run(["--codex-mcp"]);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   await access(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"));
+});
+
+test("Rosalind registration is installed for both hosts with shared state and Codex settings", async (t) => {
+  const f = await fixture(t);
+  const state = join(f.dir, "rosalind state");
+  const { calls } = await f.run(["--rosalind-mcp"], "", { DUAL_AGENT_STATE_DIR: state, CODEX_BIN: f.customBinary });
+  const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add" && call.args.includes("rosalind-delegate"));
+  assert.equal(registrations.length, 2);
+  assert.equal(registrationEnv(calls, "claude").CODEX_BIN, f.customBinary);
+  assert.equal(registrationEnv(calls, "codex").CODEX_BIN, f.customBinary);
+  assert.equal(registrationEnv(calls, "claude").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(registrationEnv(calls, "claude").DUAL_AGENT_STATE_DIR, state);
+  assert.equal(registrationEnv(calls, "codex").DUAL_AGENT_STATE_DIR, state);
+  assert.ok(registrations.some(call => call.args.some(arg => arg.endsWith("/rosalindMcp.js"))));
+  assert.ok(registrations.some(call => call.args.some(arg => arg.endsWith("/rosalindCodexMcp.js"))));
+  assert.equal(await readFile(join(f.testHome, ".claude/skills/rosalind-delegate/SKILL.md"), "utf8"), "rosalind-delegate fixture");
+  assert.equal(await readFile(join(f.testHome, ".codex/skills/rosalind-delegate/SKILL.md"), "utf8"), "rosalind-delegate fixture");
+});
+
+test("Rosalind setup fails before registration when its Codex profile is missing", async (t) => {
+  const f = await fixture(t);
+  await rm(join(f.testHome, ".codex/rosalind_delegate.config.toml"));
+  const { calls, output } = await f.run(["--rosalind-mcp"], "", {}, 1);
+  assert.match(output, /Rosalind Codex profile not found/);
+  assert.deepEqual(calls, []);
 });

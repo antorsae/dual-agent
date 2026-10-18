@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobStore.js";
 import { runProvider } from "./runner.js";
-import { DEFAULT_TIMEOUT_MS, isFinished, Job, JobStatus, Provider, TaskRequest } from "./tasks.js";
+import { DEFAULT_TIMEOUT_MS, isFinished, Job, JobStatus, providerLabel, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 interface ActiveJob {
@@ -22,7 +22,7 @@ export class JobManager {
   }
   async submit(request: TaskRequest): Promise<Job> {
     if (this.closing) throw new Error("Delegation server is shutting down.");
-    if (!["codex", "claude"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
+    if (!["codex", "claude", "rosalind"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
     if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("A nonempty prompt is required.");
     const mode = request.mode ?? (request.type === "implement" ? "edit" : "read-only");
     if (!["read-only", "edit"].includes(mode)) throw new Error("mode must be read-only or edit.");
@@ -60,7 +60,7 @@ export class JobManager {
     active.controller.abort();
   }
   private async execute(job: Job, active: ActiveJob): Promise<void> {
-    const timeout = setTimeout(() => this.stop(active, "failed", `${job.provider === "codex" ? "Codex" : "Claude"} timed out after ${job.timeoutMs / 1000}s`), job.timeoutMs);
+    const timeout = setTimeout(() => this.stop(active, "failed", `${providerLabel(job.provider)} timed out after ${job.timeoutMs / 1000}s`), job.timeoutMs);
     let checking = false;
     const poll = setInterval(() => {
       if (checking) return;

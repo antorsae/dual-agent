@@ -11,7 +11,6 @@ node_modules/
 
 # Local agent settings and browser state
 /.claude/settings.local.json
-/.codex/chatgpt-pro-worker/
 
 # Local environment files (keep example files available to commit)
 .env

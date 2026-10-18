@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Uninstall script for Dual Agent Development Environment
-# Removes registrations and installed skills; preserves task and browser data
+# Removes registrations and installed skills; preserves task data
 #
 
 set -e
@@ -45,11 +45,23 @@ else
     fi
 fi
 
-if codex mcp remove chatgpt-pro-worker 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed chatgpt-pro-worker MCP server"
+if claude mcp remove rosalind-delegate --scope user 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate MCP server"
     REMOVED=$((REMOVED + 1))
 else
-    echo -e "  ${YELLOW}[SKIP]${NC} chatgpt-pro-worker MCP server not found"
+    CLAUDE_JSON="$HOME/.claude.json"
+    if [ -f "$CLAUDE_JSON" ] && command -v jq &>/dev/null; then
+        if jq -e '.mcpServers["rosalind-delegate"]' "$CLAUDE_JSON" >/dev/null 2>&1; then
+            UPDATED=$(jq 'del(.mcpServers["rosalind-delegate"])' "$CLAUDE_JSON")
+            echo "$UPDATED" > "$CLAUDE_JSON"
+            echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate from ~/.claude.json"
+            REMOVED=$((REMOVED + 1))
+        else
+            echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate not found in MCP config"
+        fi
+    else
+        echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
+    fi
 fi
 
 if codex mcp remove claude-delegate 2>/dev/null; then
@@ -59,10 +71,17 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} claude-delegate MCP server not found"
 fi
 
+if codex mcp remove rosalind-delegate 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate MCP server"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
+fi
+
 # 2. Remove current and legacy Claude skills
 echo -e "${YELLOW}Removing Claude Code skills...${NC}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-CLAUDE_SKILLS=(codex-delegate codex-read codex-status chatgpt-code-review codex-implement codex-plan-review codex-review)
+CLAUDE_SKILLS=(codex-delegate rosalind-delegate codex-read codex-status codex-implement codex-plan-review codex-review)
 
 for skill in "${CLAUDE_SKILLS[@]}"; do
     if [ -d "$CLAUDE_SKILLS_DIR/$skill" ]; then
@@ -77,7 +96,7 @@ done
 # 3. Remove current and legacy Codex skills
 echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
 CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-CODEX_SKILLS=(claude-delegate claude-status read-task respond chatgpt-pro-worker)
+CODEX_SKILLS=(claude-delegate rosalind-delegate claude-status read-task respond)
 
 for skill in "${CODEX_SKILLS[@]}"; do
     if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then
@@ -122,6 +141,7 @@ if .permissions.allow then .permissions.allow -= [
   "Bash(tmux send-keys:*)"
 ] else . end
 | del(.mcpServers["codex-delegate"])
+| del(.mcpServers["rosalind-delegate"])
 JQEOF
     UPDATED=$(jq -f "$TMPJQ" "$CLAUDE_SETTINGS")
     rm -f "$TMPJQ"
@@ -130,18 +150,6 @@ JQEOF
     REMOVED=$((REMOVED + 1))
 else
     echo -e "  ${YELLOW}[SKIP]${NC} Claude settings file not found or jq not available"
-fi
-
-# 5. Remove the saved launcher preference
-echo -e "${YELLOW}Removing launcher preferences...${NC}"
-DUAL_AGENT_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dual-agent"
-if [ -f "$DUAL_AGENT_CONFIG_DIR/chrome-enabled" ]; then
-    rm -f "$DUAL_AGENT_CONFIG_DIR/chrome-enabled"
-    rmdir "$DUAL_AGENT_CONFIG_DIR" 2>/dev/null || true
-    echo -e "  ${GREEN}[OK]${NC} Removed tmux Chrome preference"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} No saved launcher preferences"
 fi
 
 echo ""
@@ -156,5 +164,5 @@ else
 fi
 echo ""
 echo -e "${BLUE}Note:${NC} Restart Claude Code and Codex to unload MCP tools."
-echo "Saved task results, browser profiles, and project files were preserved."
+echo "Saved task results and project files were preserved."
 echo ""

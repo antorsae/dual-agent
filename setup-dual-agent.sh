@@ -8,9 +8,9 @@
 #   ./setup-dual-agent.sh --codex-mcp   # Install Codex delegation for Claude
 #   ./setup-dual-agent.sh --mcp    # Alias for --codex-mcp
 #   ./setup-dual-agent.sh --claude-mcp  # Install Claude delegation for Codex
+#   ./setup-dual-agent.sh --rosalind-mcp # Install Rosalind delegation for Claude and Codex
 #   ./setup-dual-agent.sh --both    # Install both delegation directions
 #   ./setup-dual-agent.sh --all    # Install all components (non-interactive)
-#   ./setup-dual-agent.sh --pro-worker  # Install only ChatGPT Pro worker for Codex
 #
 
 set -euo pipefail
@@ -23,6 +23,13 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+VERBOSE="${DUAL_AGENT_VERBOSE:-0}"
+INSTALL_LOG="${DUAL_AGENT_INSTALL_LOG:-${TMPDIR:-/tmp}/dual-agent-setup-$$.log}"
+VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-0}"
+INTERACTIVE_INSTALL=0
+for setup_arg in "$@"; do
+    [ "$setup_arg" = "--verify-rosalind-profile" ] && VERIFY_ROSALIND_PROFILE=1
+done
 
 echo -e "${BLUE}=======================================${NC}"
 echo -e "${BLUE}  Dual Agent Environment Setup${NC}"
@@ -87,60 +94,120 @@ check_install() {
 }
 
 fail() {
-    echo -e "${RED}Error: $*${NC}" >&2
+    echo -e "${RED}✗ $*${NC}" >&2
+    if [ -s "$INSTALL_LOG" ]; then
+        echo "Details: $INSTALL_LOG" >&2
+        if [ "$VERBOSE" != "1" ]; then
+            echo "Last output:" >&2
+            show_log_tail >&2 || true
+        fi
+    fi
     exit 1
 }
 
-INSTALL_NOTIFICATIONS=0
+run_logged() {
+    local status
+    if [ "$VERBOSE" = "1" ]; then
+        if command -v tee >/dev/null 2>&1; then
+            if "$@" 2>&1 | tee -a "$INSTALL_LOG"; then
+                status=${PIPESTATUS[0]}
+            else
+                status=${PIPESTATUS[0]}
+            fi
+        else
+            if "$@"; then
+                status=0
+            else
+                status=$?
+            fi
+        fi
+    else
+        if "$@" >> "$INSTALL_LOG" 2>&1; then
+            status=0
+        else
+            status=$?
+        fi
+    fi
+    return "$status"
+}
+
+run_step() {
+    local label="$1"
+    shift
+    printf "  %s..." "$label"
+    if run_logged "$@"; then
+        echo -e " ${GREEN}done${NC}"
+    else
+        echo -e " ${RED}failed${NC}"
+        return 1
+    fi
+}
+
+show_log_tail() {
+    local line
+    local -a recent=()
+    while IFS= read -r line; do
+        recent+=("$line")
+        if [ "${#recent[@]}" -gt 20 ]; then
+            recent=("${recent[@]:1}")
+        fi
+    done < "$INSTALL_LOG"
+    printf '%s\n' "${recent[@]}"
+}
+
+selection_mark() {
+    if [ "$1" -eq 1 ]; then
+        printf "[x]"
+    else
+        printf "[ ]"
+    fi
+}
+
 INSTALL_MCP=0
-INSTALL_CHATGPT=0
-INSTALL_PRO_WORKER=0
 INSTALL_CLAUDE_MCP=0
+INSTALL_ROSALIND=0
 
 case "${1:-}" in
     --all)
-        INSTALL_NOTIFICATIONS=1
         INSTALL_MCP=1
-        INSTALL_CHATGPT=1
-        INSTALL_PRO_WORKER=1
         INSTALL_CLAUDE_MCP=1
+        INSTALL_ROSALIND=1
         ;;
     --codex-mcp|--mcp) INSTALL_MCP=1 ;;
     --claude-mcp) INSTALL_CLAUDE_MCP=1 ;;
+    --rosalind-mcp|--rosalind) INSTALL_ROSALIND=1 ;;
+    --verify-rosalind-profile) INSTALL_ROSALIND=1; VERIFY_ROSALIND_PROFILE=1 ;;
     --both) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1 ;;
-    --pro-worker|--chatgpt-pro-worker) INSTALL_PRO_WORKER=1 ;;
     --help|-h)
         echo "Usage: $0 [option]"
         echo "Without arguments, choose integrations from the installation menu."
         echo "  --codex-mcp  Use Codex from Claude Code (MCP tools and skill)"
         echo "  --claude-mcp Use Claude from Codex (MCP tools and skill)"
+        echo "  --rosalind-mcp Use Rosalind (Codex profile) from Claude Code and Codex"
+        echo "  --verify-rosalind-profile Run one live Rosalind profile check"
         echo "  --both       Install both delegation integrations"
-        echo "  --pro-worker Install the ChatGPT Pro worker for Codex"
-        echo "  --all        Install every integration and notification support"
+        echo "  --all        Install all delegation integrations"
         echo "  --mcp        Alias for --codex-mcp"
         exit 0
         ;;
     "")
+        INTERACTIVE_INSTALL=1
         while true; do
-            echo "Choose integrations to install (1 = selected, 0 = unselected):"
-            echo "  1) [$INSTALL_MCP] Use Codex from Claude Code (MCP tools and skill)"
-            echo "  2) [$INSTALL_CLAUDE_MCP] Use Claude from Codex (MCP tools and skill)"
-            echo "  3) [$INSTALL_CHATGPT] Review with ChatGPT from Claude Code (Chrome)"
-            echo "  4) [$INSTALL_PRO_WORKER] Use the ChatGPT Pro worker from Codex"
-            echo "  5) [$INSTALL_NOTIFICATIONS] Desktop notification support"
-            echo "  a) Select all    n) Select none    c) Confirm"
-            if ! read -r -n 1 -p "Toggle [1-5] or confirm [c]: " choice; then
-                fail "No selection received. Use --codex-mcp, --claude-mcp, --both, --pro-worker, or --all for unattended setup."
+            echo "Select integrations (toggle a number, then continue):"
+            echo "  1) $(selection_mark "$INSTALL_MCP") Use Codex from Claude Code (MCP tools and skill)"
+            echo "  2) $(selection_mark "$INSTALL_CLAUDE_MCP") Use Claude from Codex (MCP tools and skill)"
+            echo "  3) $(selection_mark "$INSTALL_ROSALIND") Use Rosalind from Claude Code and Codex"
+            echo "  a) Select all    n) Clear all    c) Continue"
+            if ! read -r -n 1 -p "Toggle 1-3, a/n, or c: " choice; then
+                fail "No selection received. Use --codex-mcp, --claude-mcp, --rosalind-mcp, --both, or --all for unattended setup."
             fi
             echo ""
             case "$choice" in
                 1) INSTALL_MCP=$((1 - INSTALL_MCP)) ;;
                 2) INSTALL_CLAUDE_MCP=$((1 - INSTALL_CLAUDE_MCP)) ;;
-                3) INSTALL_CHATGPT=$((1 - INSTALL_CHATGPT)) ;;
-                4) INSTALL_PRO_WORKER=$((1 - INSTALL_PRO_WORKER)) ;;
-                5) INSTALL_NOTIFICATIONS=$((1 - INSTALL_NOTIFICATIONS)) ;;
-                a|A) INSTALL_NOTIFICATIONS=1; INSTALL_MCP=1; INSTALL_CHATGPT=1; INSTALL_PRO_WORKER=1; INSTALL_CLAUDE_MCP=1 ;;
-                n|N) INSTALL_NOTIFICATIONS=0; INSTALL_MCP=0; INSTALL_CHATGPT=0; INSTALL_PRO_WORKER=0; INSTALL_CLAUDE_MCP=0 ;;
+                3) INSTALL_ROSALIND=$((1 - INSTALL_ROSALIND)) ;;
+                a|A) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1; INSTALL_ROSALIND=1 ;;
+                n|N) INSTALL_MCP=0; INSTALL_CLAUDE_MCP=0; INSTALL_ROSALIND=0 ;;
                 c|C) break ;;
                 *) echo "Invalid choice" ;;
             esac
@@ -149,24 +216,35 @@ case "${1:-}" in
     *) fail "Unknown option: $1. Use --help for usage." ;;
 esac
 
-if [ "$INSTALL_NOTIFICATIONS$INSTALL_MCP$INSTALL_CHATGPT$INSTALL_PRO_WORKER$INSTALL_CLAUDE_MCP" = "00000" ]; then
+if [ "$INTERACTIVE_INSTALL" -eq 1 ] && [ "$INSTALL_ROSALIND" -eq 1 ] && [ "$VERIFY_ROSALIND_PROFILE" != "1" ] && [ -t 0 ]; then
+    printf "Run one live Rosalind profile check? This sends one Codex request. [y/N]: "
+    read -r verify_choice || verify_choice="n"
+    case "$verify_choice" in
+        y|Y|yes|YES) VERIFY_ROSALIND_PROFILE=1 ;;
+    esac
+fi
+
+if [ "$INSTALL_MCP$INSTALL_CLAUDE_MCP$INSTALL_ROSALIND" = "000" ]; then
     echo "Nothing selected. Exiting."
     exit 0
 fi
 
+: > "$INSTALL_LOG" 2>/dev/null || fail "Cannot write installer log: $INSTALL_LOG"
+
+echo -e "${BLUE}[1/4]${NC} Checking prerequisites"
 detect_os
 MISSING=0
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CHATGPT" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     check_install claude "Install from: https://code.claude.com/docs/en/setup" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     check_install node "Install from: https://nodejs.org" || MISSING=1
     check_install npm "Install Node.js with npm" || MISSING=1
 fi
-if [ "$INSTALL_PRO_WORKER" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
+if [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
     if [ "$DELEGATE_CODEX_BIN" = "codex-pool" ] && ! command -v codex-pool &> /dev/null; then
         echo -e "  ${YELLOW}[WARN]${NC} codex-pool not found on PATH; falling back to codex"
@@ -184,95 +262,95 @@ fi
 if [ "$MISSING" -eq 1 ]; then
     fail "Install the missing dependencies and run setup again."
 fi
-
-# Install notification dependencies based on OS
-if [ "$INSTALL_NOTIFICATIONS" -eq 1 ]; then
-    echo -e "${YELLOW}Checking notification support...${NC}"
-
-    install_notifications() {
-        case "$OS" in
-            macos)
-                # macOS has osascript built-in
-                echo -e "  ${GREEN}[OK]${NC} osascript (built-in)"
-                ;;
-            linux)
-                if command -v notify-send &> /dev/null; then
-                    echo -e "  ${GREEN}[OK]${NC} notify-send"
-                else
-                    echo -e "  ${YELLOW}[MISSING]${NC} notify-send - needed for desktop notifications"
-
-                    # Try to install automatically
-                    case "$PKG_MANAGER" in
-                        apt)
-                            echo -e "  ${BLUE}[INFO]${NC} Installing libnotify-bin..."
-                            sudo apt-get install -y libnotify-bin && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
-                            ;;
-                        dnf|yum)
-                            echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
-                            sudo $PKG_MANAGER install -y libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
-                            ;;
-                        pacman)
-                            echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
-                            sudo pacman -S --noconfirm libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
-                            ;;
-                        zypper)
-                            echo -e "  ${BLUE}[INFO]${NC} Installing libnotify-tools..."
-                            sudo zypper install -y libnotify-tools && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
-                            ;;
-                        apk)
-                            echo -e "  ${BLUE}[INFO]${NC} Installing libnotify..."
-                            sudo apk add libnotify && echo -e "  ${GREEN}[OK]${NC} notify-send installed" || echo -e "  ${RED}[WARN]${NC} Failed to install, notifications won't work"
-                            ;;
-                        *)
-                            echo -e "  ${YELLOW}[WARN]${NC} Please install libnotify manually for desktop notifications"
-                            ;;
-                    esac
-                fi
-                ;;
-            windows)
-                echo -e "  ${YELLOW}[INFO]${NC} Windows detected. For notifications, install BurntToast:"
-                echo -e "           ${BLUE}Install-Module -Name BurntToast${NC}"
-                ;;
-            *)
-                echo -e "  ${YELLOW}[WARN]${NC} Unknown OS - notifications may not work"
-                ;;
-        esac
-    }
-
-    install_notifications
-    echo ""
-fi
+echo -e "  ${GREEN}done${NC}"
 
 AGENT_DIR="$SCRIPT_DIR/agent"
 DELEGATE_STATE_DIR="${DUAL_AGENT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/dual-agent}"
 case "$DELEGATE_STATE_DIR" in /*) ;; *) fail "DUAL_AGENT_STATE_DIR must be an absolute path." ;; esac
 DELEGATE_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
 
+if [ "$INSTALL_ROSALIND" -eq 1 ]; then
+    ROSALIND_PROFILE_FILE="$DELEGATE_CODEX_HOME/rosalind_delegate.config.toml"
+    [ -f "$ROSALIND_PROFILE_FILE" ] || fail "Rosalind Codex profile not found: $ROSALIND_PROFILE_FILE. Create this profile before installing Rosalind."
+    echo "  Rosalind Codex profile: using existing $ROSALIND_PROFILE_FILE"
+    verify_rosalind_profile() {
+        local answer_file="${INSTALL_LOG}.rosalind-answer"
+        local prompt="Reply with exactly: ROSALIND_PROFILE_OK"
+        rm -f "$answer_file"
+        if ! printf '%s\n' "$prompt" | CODEX_HOME="$DELEGATE_CODEX_HOME" "$DELEGATE_CODEX_BIN" -p rosalind_delegate exec \
+            --ephemeral --sandbox read-only --skip-git-repo-check --json \
+            --output-last-message "$answer_file" - >> "$INSTALL_LOG" 2>&1; then
+            rm -f "$answer_file"
+            return 1
+        fi
+        if [ ! -s "$answer_file" ]; then
+            rm -f "$answer_file"
+            return 1
+        fi
+        local answer
+        answer="$(<"$answer_file")"
+        rm -f "$answer_file"
+        [[ "$answer" == *"ROSALIND_PROFILE_OK"* ]]
+    }
+    if [ "$VERIFY_ROSALIND_PROFILE" = "1" ]; then
+        if ! run_step "Live Rosalind profile check" verify_rosalind_profile; then
+            fail "The live Rosalind profile check failed."
+        fi
+    fi
+fi
+
 install_skill() {
     local source="$1" destination="$2"
     [ -f "$source/SKILL.md" ] || fail "Skill not found: $source/SKILL.md"
     mkdir -p "$destination"
     cp -R "$source/." "$destination/"
-    echo -e "  ${GREEN}[OK]${NC} Installed skill: $destination"
 }
 
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_PRO_WORKER" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
+echo -e "${BLUE}[2/4]${NC} Building agent package"
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     [ -d "$AGENT_DIR" ] || fail "Agent package not found: $AGENT_DIR"
-    echo -e "${YELLOW}Building agent MCP servers...${NC}"
-    if ! (cd "$AGENT_DIR" && npm ci && npm run build); then
-        fail "Agent install/build failed. Fix the error above and rerun setup."
+    build_agent() { (cd "$AGENT_DIR" && npm ci && npm run build); }
+    if ! run_step "MCP servers" build_agent; then
+        fail "Agent install/build failed."
     fi
+else
+    echo "  skipped"
 fi
+
+echo -e "${BLUE}[3/4]${NC} Registering integrations"
 
 if [ "$INSTALL_MCP" -eq 1 ]; then
     MCP_SERVER_PATH="$AGENT_DIR/dist/mcp.js"
     [ -f "$MCP_SERVER_PATH" ] || fail "MCP build output not found: $MCP_SERVER_PATH"
-    claude mcp remove codex-delegate --scope user 2>/dev/null || true
-    if ! claude mcp add --scope user codex-delegate --env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR" --env "CODEX_HOME=$DELEGATE_CODEX_HOME" -- node "$MCP_SERVER_PATH"; then
+    run_logged claude mcp remove codex-delegate --scope user || true
+    if ! run_step "codex-delegate → Claude Code" claude mcp add --scope user codex-delegate --env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR" --env "CODEX_HOME=$DELEGATE_CODEX_HOME" -- node "$MCP_SERVER_PATH"; then
         fail "Could not register codex-delegate. Fix the Claude CLI error above and rerun setup."
     fi
-    install_skill "$SCRIPT_DIR/.claude/skills/codex-delegate" "$HOME/.claude/skills/codex-delegate"
-    echo -e "  ${GREEN}[OK]${NC} Registered codex-delegate for Claude (user scope)"
+    if ! run_step "codex-delegate skill" install_skill "$SCRIPT_DIR/.claude/skills/codex-delegate" "$HOME/.claude/skills/codex-delegate"; then
+        fail "Could not install the codex-delegate skill."
+    fi
+fi
+
+if [ "$INSTALL_ROSALIND" -eq 1 ]; then
+    ROSALIND_CLAUDE_SERVER_PATH="$AGENT_DIR/dist/rosalindMcp.js"
+    ROSALIND_CODEX_SERVER_PATH="$AGENT_DIR/dist/rosalindCodexMcp.js"
+    [ -f "$ROSALIND_CLAUDE_SERVER_PATH" ] || fail "MCP build output not found: $ROSALIND_CLAUDE_SERVER_PATH"
+    [ -f "$ROSALIND_CODEX_SERVER_PATH" ] || fail "MCP build output not found: $ROSALIND_CODEX_SERVER_PATH"
+    ROSALIND_SERVER_ENV=(--env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
+    run_logged claude mcp remove rosalind-delegate --scope user || true
+    if ! run_step "rosalind-delegate → Claude Code" claude mcp add --scope user rosalind-delegate "${ROSALIND_SERVER_ENV[@]}" -- node "$ROSALIND_CLAUDE_SERVER_PATH"; then
+        fail "Could not register rosalind-delegate for Claude. Fix the Claude CLI error above and rerun setup."
+    fi
+    run_logged codex mcp remove rosalind-delegate || true
+    if ! run_step "rosalind-delegate → Codex" codex mcp add rosalind-delegate "${ROSALIND_SERVER_ENV[@]}" -- node "$ROSALIND_CODEX_SERVER_PATH"; then
+        fail "Could not register rosalind-delegate for Codex. Fix the Codex CLI error above and rerun setup."
+    fi
+    if ! run_step "rosalind-delegate skills" install_skill "$SCRIPT_DIR/.claude/skills/rosalind-delegate" "$HOME/.claude/skills/rosalind-delegate"; then
+        fail "Could not install the Claude Rosalind skill."
+    fi
+    if ! run_step "rosalind-delegate Codex skill" install_skill "$SCRIPT_DIR/.codex/skills/rosalind-delegate" "$DELEGATE_CODEX_HOME/skills/rosalind-delegate"; then
+        fail "Could not install the Codex Rosalind skill."
+    fi
 fi
 
 if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
@@ -282,33 +360,17 @@ if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
         CLAUDE_SERVER_ENV+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
     fi
-    codex mcp remove claude-delegate 2>/dev/null || true
-    if ! codex mcp add claude-delegate "${CLAUDE_SERVER_ENV[@]}" -- node "$CLAUDE_MCP_SERVER_PATH"; then
+    run_logged codex mcp remove claude-delegate || true
+    if ! run_step "claude-delegate → Codex" codex mcp add claude-delegate "${CLAUDE_SERVER_ENV[@]}" -- node "$CLAUDE_MCP_SERVER_PATH"; then
         fail "Could not register claude-delegate. Fix the Codex CLI error above and rerun setup."
     fi
-    install_skill "$SCRIPT_DIR/.codex/skills/claude-delegate" "$DELEGATE_CODEX_HOME/skills/claude-delegate"
-fi
-
-if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
-    PRO_MCP_SERVER_PATH="$AGENT_DIR/dist/chatgptProMcp.js"
-    [ -f "$PRO_MCP_SERVER_PATH" ] || fail "MCP build output not found: $PRO_MCP_SERVER_PATH"
-    echo -e "${YELLOW}Installing Playwright Chromium...${NC}"
-    if ! (cd "$AGENT_DIR" && npx playwright install chromium); then
-        fail "Chromium installation failed. Fix the error above and rerun setup."
+    if ! run_step "claude-delegate skill" install_skill "$SCRIPT_DIR/.codex/skills/claude-delegate" "$DELEGATE_CODEX_HOME/skills/claude-delegate"; then
+        fail "Could not install the claude-delegate skill."
     fi
-    # Codex filters inherited environment variables, so persist this explicitly.
-    PRO_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-    codex mcp remove chatgpt-pro-worker 2>/dev/null || true
-    if ! codex mcp add chatgpt-pro-worker --env "CODEX_HOME=$PRO_CODEX_HOME" -- node "$PRO_MCP_SERVER_PATH"; then
-        fail "Could not register chatgpt-pro-worker. Fix the Codex CLI error above and rerun setup."
-    fi
-    install_skill "$SCRIPT_DIR/.codex/skills/chatgpt-pro-worker" "$PRO_CODEX_HOME/skills/chatgpt-pro-worker"
 fi
 
-if [ "$INSTALL_CHATGPT" -eq 1 ]; then
-    install_skill "$SCRIPT_DIR/.claude/skills/chatgpt-code-review" "$HOME/.claude/skills/chatgpt-code-review"
-fi
-
+echo -e "${BLUE}[4/4]${NC} Finalizing"
+echo -e "  ${GREEN}done${NC}"
 echo ""
 echo -e "${GREEN}Setup Complete!${NC}"
 if [ "$INSTALL_MCP" -eq 1 ]; then
@@ -317,13 +379,11 @@ if [ "$INSTALL_MCP" -eq 1 ]; then
     echo "Jobs: delegate_codex_status, delegate_codex_list, delegate_codex_cancel"
     echo "Check registration: claude mcp get codex-delegate"
 fi
-if [ "$INSTALL_CHATGPT" -eq 1 ]; then
-    echo "Start claude --chrome, then use /chatgpt-code-review."
-    echo "Requires the Claude in Chrome extension and a signed-in ChatGPT browser session."
-fi
-if [ "$INSTALL_PRO_WORKER" -eq 1 ]; then
-    echo 'Restart Codex, then use $chatgpt-pro-worker.'
-    echo "Run open_pro_login for the one-time ChatGPT login, then login_status to verify."
+if [ "$INSTALL_ROSALIND" -eq 1 ]; then
+    echo "Restart Claude Code and Codex, then use the delegate_rosalind_* tools for Codex with the rosalind_delegate profile."
+    echo "Tools: delegate_rosalind_review, delegate_rosalind_implement, delegate_rosalind_plan_review, delegate_rosalind"
+    echo "Jobs: delegate_rosalind_status, delegate_rosalind_list, delegate_rosalind_cancel"
+    echo "Check registrations: claude mcp get rosalind-delegate; codex mcp get rosalind-delegate"
 fi
 if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     echo "Restart Codex to load Claude's review, implementation, plan-review, and custom task tools."

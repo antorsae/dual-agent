@@ -3,8 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { JobManager } from "./jobs.js";
-import { notifyChannel, notifyCompletion } from "./notifications.js";
-import { ExecutionMode, isFinished, Job, Provider, TaskType } from "./tasks.js";
+import { notifyChannel } from "./notifications.js";
+import { ExecutionMode, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
 
 const MAX_RESULT_CHARS = 64000;
 const stringArg = (args: Record<string, unknown>, key: string, required = false): string | undefined => {
@@ -30,25 +30,38 @@ function filesArg(args: Record<string, unknown>): string[] | undefined {
   return value;
 }
 
-export async function serveDelegation(provider: Provider): Promise<void> {
-  const label = provider === "codex" ? "Codex" : "Claude";
-  const prefix = `delegate_${provider}`;
+export interface DelegationServerOptions {
+  provider: Provider;
+  serverName?: string;
+  toolPrefix?: string;
+  label?: string;
+  enableChannel?: boolean;
+  channelSource?: string;
+}
+
+export async function serveDelegation(providerOrOptions: Provider | DelegationServerOptions): Promise<void> {
+  const options = typeof providerOrOptions === "string" ? { provider: providerOrOptions } : providerOrOptions;
+  const { provider } = options;
+  const serverName = options.serverName ?? `${provider}-delegate`;
+  const prefix = options.toolPrefix ?? `delegate_${provider}`;
+  const label = options.label ?? providerLabel(provider);
+  const enableChannel = options.enableChannel ?? provider !== "claude";
+  const channelSource = options.channelSource ?? serverName;
   const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
-  const completionGuidance = (provider === "codex"
-    ? "If this session explicitly enabled the codex-delegate channel, await its completion event while doing independent work, then fetch the result with delegate_codex_status. " +
+  const completionGuidance = (enableChannel
+    ? `If this session explicitly enabled the ${channelSource} channel, await its completion event while doing independent work, then fetch the result with ${prefix}_status. ` +
       `If channel delivery is unavailable or uncertain: ${statusGuidance}`
     : statusGuidance) + " A running job is not a finished answer.";
-  const server = new Server({ name: `${provider}-delegate`, version: "0.3.0" }, {
-    capabilities: { tools: {}, ...(provider === "codex" ? { experimental: { "claude/channel": {} } } : {}) },
-    instructions: provider === "codex"
-      ? 'Codex jobs emit one-way <channel source="codex-delegate" task_id="..." task_type="..." status="completed|failed|cancelled|interrupted" duration="..."> events. ' +
-        "When one arrives, call delegate_codex_status with its task_id and present the saved result unless already collected. No reply to the channel is expected. " +
+  const server = new Server({ name: serverName, version: "0.3.0" }, {
+    capabilities: { tools: {}, ...(enableChannel ? { experimental: { "claude/channel": {} } } : {}) },
+    instructions: enableChannel
+      ? `${label} jobs emit one-way <channel source="${channelSource}" task_id="..." task_type="..." status="completed|failed|cancelled|interrupted" duration="..."> events. ` +
+        `When one arrives, call ${prefix}_status with its task_id and present the saved result unless already collected. No reply to the channel is expected. ` +
         "Events are best effort and are not replayed after reconnecting; use status to recover saved results. " + completionGuidance
       : undefined,
   });
   const manager = new JobManager(undefined, undefined, job => {
-    notifyCompletion(job);
-    void notifyChannel(server, job);
+    if (enableChannel) void notifyChannel(server, job, { source: channelSource, toolPrefix: prefix });
   });
   await manager.store.init();
   const common = {
@@ -147,5 +160,5 @@ export async function serveDelegation(provider: Provider): Promise<void> {
   process.once("SIGTERM", () => { void close().then(() => process.exit(0)); });
   process.stdin.once("end", () => { void close(); });
   await server.connect(new StdioServerTransport());
-  console.error(`[${provider}-delegate] Ready. Job state: ${manager.store.root}`);
+  console.error(`[${serverName}] Ready. Job state: ${manager.store.root}`);
 }

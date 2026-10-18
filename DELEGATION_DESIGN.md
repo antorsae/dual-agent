@@ -24,9 +24,9 @@ The Codex MCP server also emits Claude Code channel events from the job manager'
 completion callback, after finalizing job state. Events include the job ID, type,
 terminal status, and duration; the host retrieves the full result through the
 status tool. Claude must explicitly enable the channel for the current session.
-The reverse server continues to use bounded status waits. Desktop notifications
-remain independent of channel delivery. Events are best effort and are not
-persisted or replayed, so reconnecting hosts recover results through status/list.
+The reverse server continues to use bounded status waits. Events are best effort
+and are not persisted or replayed, so reconnecting hosts recover results through
+status/list.
 
 ## Cancellation and interruption
 
@@ -42,7 +42,7 @@ If a worker or its process group might still be alive, its edit lock is retained
 
 Locks use an exclusive filesystem operation and contain the owning job ID. Stale-lock recovery is serialized so competing reclaimers cannot remove a new owner's lock. An interrupted recovery guard is retained for inspection, rather than guessed away.
 
-Both providers and the standalone Codex wrapper share these locks. Git subdirectories and symlink aliases resolve to the same worktree lock. Non-Git callers should use the same top-level project directory consistently. Separate Git worktrees can be chosen explicitly for concurrent editing.
+All providers and the standalone Codex wrapper share these locks. Git subdirectories and symlink aliases resolve to the same worktree lock. Non-Git callers should use the same top-level project directory consistently. Separate Git worktrees can be chosen explicitly for concurrent editing.
 
 The orchestrating agent must also avoid writing to the same workspace during a delegated edit. These locks coordinate delegated workers, not arbitrary editors or shell commands outside this project.
 
@@ -57,11 +57,11 @@ translate permissions between Claude and Codex.
 
 Codex uses its read-only sandbox with approval escalation disabled for read-only tasks, and automatic approval review for editing. Claude exposes only file-reading tools in read-only mode, and file editing/Bash tools under automatic permission review for editing. Claude's tool restriction does not add an OS sandbox around CLI startup customizations. Permission denials are reported as a failed job, preserving the answer and logs for inspection.
 
-Provider settings and project instructions remain native to the installed CLIs. Workers receive an instruction to complete the task themselves. Claude starts with an empty MCP configuration and disabled skills, while Codex disables both delegation servers. This prevents the ordinary reverse-server recursion path.
+Provider settings and project instructions remain native to the installed CLIs. Workers receive an instruction to complete the task themselves. Claude starts with an empty MCP configuration and disabled skills, while Codex disables all delegation servers. This prevents recursive handoffs.
 
 ## Host discovery and prompts
 
-`codex-delegate` exposes Codex tools to Claude Code; `claude-delegate` exposes Claude tools to Codex. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
+`codex-delegate` exposes Codex tools to Claude Code; `claude-delegate` exposes Claude tools to Codex; `rosalind-delegate` exposes the same Codex-backed tools to both hosts while selecting the `rosalind_delegate` Codex profile. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
 
 The installed host skills describe when an independent review is useful and how to gather a result. They guide proactive selection for substantial work while avoiding unnecessary delegation for trivial tasks. The host still decides whether to call a tool. Users do not maintain a fixed prompt or type a subprocess command.
 

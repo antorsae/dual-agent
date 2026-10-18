@@ -29,7 +29,7 @@ async function fixture(t) {
   await writeFile(descendants, "");
   await writeFile(binary, await readFile(new URL("./fixtures/fake-agent.mjs", import.meta.url)), { mode: 0o755 });
   const clients = [];
-  const env = { ...process.env, CODEX_BIN: binary, CLAUDE_BIN: binary, DUAL_AGENT_STATE_DIR: state, DUAL_AGENT_NOTIFICATIONS: "0", FAKE_CAPTURE: capture, FAKE_DESCENDANTS: descendants };
+  const env = { ...process.env, CODEX_BIN: binary, CLAUDE_BIN: binary, DUAL_AGENT_STATE_DIR: state, FAKE_CAPTURE: capture, FAKE_DESCENDANTS: descendants };
   delete env.CLAUDE_PROJECT_DIR;
   for (const key of ["DUAL_AGENT_CAPTURE", "DUAL_AGENT_EXIT", "DUAL_AGENT_DELAY", "DUAL_AGENT_OUTPUT_SIZE"]) delete env[key];
   const requests = async () => (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
@@ -41,10 +41,17 @@ async function fixture(t) {
     }
     await rm(root, { recursive: true, force: true });
   });
-  async function connect(provider = "codex", overrides = {}, cwd = root) {
+  async function connect(provider = "codex", overrides = {}, cwd = root, host = "claude") {
+    const server = provider === "codex"
+      ? "../dist/mcp.js"
+      : provider === "claude"
+        ? "../dist/claudeMcp.js"
+        : host === "codex"
+          ? "../dist/rosalindCodexMcp.js"
+          : "../dist/rosalindMcp.js";
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [fileURLToPath(new URL(provider === "codex" ? "../dist/mcp.js" : "../dist/claudeMcp.js", import.meta.url))],
+      args: [fileURLToPath(new URL(server, import.meta.url))],
       cwd, env: { ...env, ...overrides }, stderr: "pipe",
     });
     transport.stderr?.on("data", () => {});
@@ -62,6 +69,48 @@ async function fixture(t) {
   }
   return { root, project, state, capture, requests, descendants, connect, store: new JobStore(state) };
 }
+
+test("Rosalind exposes the same tools and uses its Codex profile", async t => {
+  const f = await fixture(t);
+  const claudeHost = await f.connect("rosalind");
+  const discovery = await claudeHost.client.listTools();
+  assert.equal(discovery.tools.length, 7);
+  assert.deepEqual(claudeHost.client.getServerCapabilities().experimental?.["claude/channel"], {});
+  assert.match(claudeHost.client.getInstructions(), /delegate_rosalind_status/);
+  const result = await claudeHost.call("", { prompt: "Review with Rosalind", cwd: f.project, wait: true });
+  assert.equal(result.structuredContent.status, "completed", text(result));
+  assert.equal(result.structuredContent.provider, "rosalind");
+  const request = (await f.requests()).at(-1);
+  assert.equal(request.args[request.args.indexOf("-p") + 1], "rosalind_delegate");
+  assert.ok(request.args.includes("--skip-git-repo-check"));
+  assert.ok(request.args.some(arg => arg.includes("rosalind-delegate") && arg.includes("enabled=false")));
+
+  const codexHost = await f.connect("rosalind", {}, f.project, "codex");
+  const codexDiscovery = await codexHost.client.listTools();
+  assert.equal(codexDiscovery.tools.length, 7);
+  assert.equal(codexHost.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+  const codexResult = await codexHost.call("_review", { prompt: "Review from Codex", cwd: f.project, wait: true });
+  assert.equal(codexResult.structuredContent.status, "completed", text(codexResult));
+  const codexRequest = (await f.requests()).at(-1);
+  assert.equal(codexRequest.args[codexRequest.args.indexOf("-p") + 1], "rosalind_delegate");
+
+  const editResult = await claudeHost.call("_implement", { prompt: "Implement with Rosalind", cwd: f.project, wait: true });
+  assert.equal(editResult.structuredContent.status, "completed", text(editResult));
+  const editRequest = (await f.requests()).at(-1);
+  assert.equal(editRequest.args[editRequest.args.indexOf("-p") + 1], "rosalind_delegate");
+  assert.ok(editRequest.args.includes("--approve-for-me"));
+
+  const codex = await f.connect("codex");
+  const ordinary = await codex.call("", { prompt: "Ordinary Codex job", cwd: f.project, wait: true });
+  const isolated = await claudeHost.call("_status", { task_id: ordinary.structuredContent.task_id });
+  assert.equal(isolated.isError, true, text(isolated));
+
+  const started = await claudeHost.call("", { prompt: "[slow] Rosalind channel result", cwd: f.project });
+  const event = await eventually(() => claudeHost.channelEvents.find(event => event.meta?.task_id === started.structuredContent.task_id));
+  assert.equal(event.meta.task_type, "custom");
+  assert.equal(event.meta.status, "completed");
+  assert.match(event.content, /delegate_rosalind_status/);
+});
 
 for (const provider of ["codex", "claude"]) {
   test(`${provider}: discovers all tools and handles a different prompt per call`, async t => {
@@ -188,7 +237,6 @@ for (const [scenario, prompt, status, timeoutMs] of [
   test(`Codex channel reports ${scenario} with a retrievable saved result`, { skip: scenario === "interruption" && process.platform === "win32" }, async t => {
     const f = await fixture(t);
     const c = await f.connect();
-    // Desktop notifications are disabled by the fixture; channel delivery is independent.
     const started = await c.call("", { prompt, cwd: f.project, ...(timeoutMs ? { timeout_ms: timeoutMs } : {}) });
     const id = started.structuredContent.task_id;
     assert.equal(started.structuredContent.status, "running");
