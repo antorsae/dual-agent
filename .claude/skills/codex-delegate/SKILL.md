@@ -28,6 +28,8 @@ work between calls where possible. Events are not replayed after a restart.
 
 A task ID or running status is not the completed answer. Use
 `delegate_codex_list` to recover IDs and `delegate_codex_cancel` to stop work.
+Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
+and discards its answer, and reviews can take from minutes to over an hour.
 Inspect the returned findings, changes, and tests before reporting completion.
 Inspect changes from an interrupted job before retrying; never delete a lock
 to force a new worker.

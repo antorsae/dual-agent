@@ -146,7 +146,7 @@ with the corresponding status tool:
 
 The status call waits up to 30 seconds, returning sooner when the job finishes. This works within ordinary MCP request timeouts and avoids rapid polling. `wait: true` on the original delegation call is also available for short tasks; long tasks should use background submission with channel events or bounded status waits.
 
-Tasks time out after two hours by default. `timeout_ms` overrides this. The cancel tool accepts `task_id` and can request cancellation from another live instance of the same provider's server. Cancellation stops the worker process group and retains diagnostics.
+Tasks time out after two hours by default. `timeout_ms` overrides this, but a timeout kills the worker and discards its answer, so hosts should normally leave it unset. The cancel tool accepts `task_id` and can request cancellation from another live instance of the same provider's server. Cancellation stops the worker process group and retains diagnostics.
 
 Jobs live under `~/.local/state/dual-agent/jobs/<uuid>/`. `XDG_STATE_HOME` changes the state base; `DUAL_AGENT_STATE_DIR` overrides the complete `dual-agent` directory. Setup persists the same absolute state path in all MCP registrations so they share results and locks.
 

@@ -26,6 +26,8 @@ The call returns a persistent task ID by default. Continue with
 independent work between calls where possible. Do not leave the user with only
 "task started" unless they requested background work. Use `delegate_claude_list`
 to recover a task ID and `delegate_claude_cancel` when the work should stop.
+Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
+and discards its answer, and reviews can take from minutes to over an hour.
 
 Inspect the result, changes, errors, and verification. A completed worker is
 evidence to integrate, not a substitute for checking the user's objective.

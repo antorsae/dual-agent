@@ -69,7 +69,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." },
     mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." },
     wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
-    timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: "Worker timeout in milliseconds (default two hours)." },
+    timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: `Hard limit in milliseconds (default two hours) that kills the worker and discards its answer. Leave unset unless the user asks for a limit; reviews can take from minutes to over an hour. Bound your own waiting with ${prefix}_status wait_ms instead.` },
   };
   const kinds: Array<[string, TaskType, string]> = [
     ["_review", "review", `Get an independent ${label} code review: bugs, security, performance, and edge cases. Use when another model's review would help, including ordinary requests for a second opinion. Defaults to read-only.`],
