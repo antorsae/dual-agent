@@ -78,6 +78,13 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
 fi
 
+if codex mcp remove codex-delegate 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate MCP server from Codex"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} codex-delegate MCP server not found in Codex"
+fi
+
 # 2. Remove current and legacy Claude skills
 echo -e "${YELLOW}Removing Claude Code skills...${NC}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
@@ -96,7 +103,7 @@ done
 # 3. Remove current and legacy Codex skills
 echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
 CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-CODEX_SKILLS=(claude-delegate rosalind-delegate claude-status read-task respond)
+CODEX_SKILLS=(claude-delegate codex-delegate rosalind-delegate claude-status read-task respond)
 
 for skill in "${CODEX_SKILLS[@]}"; do
     if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then

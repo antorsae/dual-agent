@@ -9,6 +9,7 @@
 #   ./setup-dual-agent.sh --mcp    # Alias for --codex-mcp
 #   ./setup-dual-agent.sh --claude-mcp  # Install Claude delegation for Codex
 #   ./setup-dual-agent.sh --rosalind-mcp # Install Rosalind delegation for Claude and Codex
+#   ./setup-dual-agent.sh --codex-from-codex # Install Codex delegation for Codex
 #   ./setup-dual-agent.sh --both    # Install both delegation directions
 #   ./setup-dual-agent.sh --all    # Install all components (non-interactive)
 #
@@ -166,16 +167,19 @@ selection_mark() {
 INSTALL_MCP=0
 INSTALL_CLAUDE_MCP=0
 INSTALL_ROSALIND=0
+INSTALL_CODEX_FROM_CODEX=0
 
 case "${1:-}" in
     --all)
         INSTALL_MCP=1
         INSTALL_CLAUDE_MCP=1
         INSTALL_ROSALIND=1
+        INSTALL_CODEX_FROM_CODEX=1
         ;;
     --codex-mcp|--mcp) INSTALL_MCP=1 ;;
     --claude-mcp) INSTALL_CLAUDE_MCP=1 ;;
     --rosalind-mcp|--rosalind) INSTALL_ROSALIND=1 ;;
+    --codex-from-codex) INSTALL_CODEX_FROM_CODEX=1 ;;
     --verify-rosalind-profile) INSTALL_ROSALIND=1; VERIFY_ROSALIND_PROFILE=1 ;;
     --both) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1 ;;
     --help|-h)
@@ -184,6 +188,7 @@ case "${1:-}" in
         echo "  --codex-mcp  Use Codex from Claude Code (MCP tools and skill)"
         echo "  --claude-mcp Use Claude from Codex (MCP tools and skill)"
         echo "  --rosalind-mcp Use Rosalind (Codex profile) from Claude Code and Codex"
+        echo "  --codex-from-codex Use Codex from Codex (MCP tools and skill)"
         echo "  --verify-rosalind-profile Run one live Rosalind profile check"
         echo "  --both       Install both delegation integrations"
         echo "  --all        Install all delegation integrations"
@@ -197,17 +202,19 @@ case "${1:-}" in
             echo "  1) $(selection_mark "$INSTALL_MCP") Use Codex from Claude Code (MCP tools and skill)"
             echo "  2) $(selection_mark "$INSTALL_CLAUDE_MCP") Use Claude from Codex (MCP tools and skill)"
             echo "  3) $(selection_mark "$INSTALL_ROSALIND") Use Rosalind from Claude Code and Codex"
+            echo "  4) $(selection_mark "$INSTALL_CODEX_FROM_CODEX") Use Codex from Codex (MCP tools and skill)"
             echo "  a) Select all    n) Clear all    c) Continue"
-            if ! read -r -n 1 -p "Toggle 1-3, a/n, or c: " choice; then
-                fail "No selection received. Use --codex-mcp, --claude-mcp, --rosalind-mcp, --both, or --all for unattended setup."
+            if ! read -r -n 1 -p "Toggle 1-4, a/n, or c: " choice; then
+                fail "No selection received. Use --codex-mcp, --claude-mcp, --rosalind-mcp, --codex-from-codex, --both, or --all for unattended setup."
             fi
             echo ""
             case "$choice" in
                 1) INSTALL_MCP=$((1 - INSTALL_MCP)) ;;
                 2) INSTALL_CLAUDE_MCP=$((1 - INSTALL_CLAUDE_MCP)) ;;
                 3) INSTALL_ROSALIND=$((1 - INSTALL_ROSALIND)) ;;
-                a|A) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1; INSTALL_ROSALIND=1 ;;
-                n|N) INSTALL_MCP=0; INSTALL_CLAUDE_MCP=0; INSTALL_ROSALIND=0 ;;
+                4) INSTALL_CODEX_FROM_CODEX=$((1 - INSTALL_CODEX_FROM_CODEX)) ;;
+                a|A) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1; INSTALL_ROSALIND=1; INSTALL_CODEX_FROM_CODEX=1 ;;
+                n|N) INSTALL_MCP=0; INSTALL_CLAUDE_MCP=0; INSTALL_ROSALIND=0; INSTALL_CODEX_FROM_CODEX=0 ;;
                 c|C) break ;;
                 *) echo "Invalid choice" ;;
             esac
@@ -224,7 +231,7 @@ if [ "$INTERACTIVE_INSTALL" -eq 1 ] && [ "$INSTALL_ROSALIND" -eq 1 ] && [ "$VERI
     esac
 fi
 
-if [ "$INSTALL_MCP$INSTALL_CLAUDE_MCP$INSTALL_ROSALIND" = "000" ]; then
+if [ "$INSTALL_MCP$INSTALL_CLAUDE_MCP$INSTALL_ROSALIND$INSTALL_CODEX_FROM_CODEX" = "0000" ]; then
     echo "Nothing selected. Exiting."
     exit 0
 fi
@@ -237,14 +244,14 @@ MISSING=0
 if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
     check_install claude "Install from: https://code.claude.com/docs/en/setup" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
     check_install node "Install from: https://nodejs.org" || MISSING=1
     check_install npm "Install Node.js with npm" || MISSING=1
 fi
-if [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
+if [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
     DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
     if [ "$DELEGATE_CODEX_BIN" = "codex-pool" ] && ! command -v codex-pool &> /dev/null; then
         echo -e "  ${YELLOW}[WARN]${NC} codex-pool not found on PATH; falling back to codex"
@@ -306,8 +313,55 @@ install_skill() {
     cp -R "$source/." "$destination/"
 }
 
+# Codex starts stdio MCP servers with a minimal environment, so a delegated
+# Codex worker lacks provider API keys unless the registration lists them in
+# env_vars. Collect the variable names that model providers read (env_key).
+codex_env_keys() {
+    local file line keys=" "
+    local pattern="env_key[[:space:]]*=[[:space:]]*[\"']([A-Za-z_][A-Za-z0-9_]*)[\"']"
+    for file in "$@"; do
+        [ -f "$file" ] || continue
+        while IFS= read -r line || [ -n "$line" ]; do
+            if [[ "$line" =~ $pattern ]] && [[ "$keys" != *" ${BASH_REMATCH[1]} "* ]]; then
+                keys+="${BASH_REMATCH[1]} "
+            fi
+        done < "$file"
+    done
+    keys="${keys# }"
+    printf '%s' "${keys% }"
+}
+
+# codex mcp add cannot set env_vars, so insert it below the server's table
+# header. Rewriting in place keeps the file's mode and any symlink.
+add_codex_env_vars() {
+    local server="$1" keys="$2" config="$DELEGATE_CODEX_HOME/config.toml"
+    local line name list="" found=0
+    local -a lines=()
+    for name in $keys; do list+="${list:+, }\"$name\""; done
+    [ -f "$config" ] || { echo "Codex config not found: $config" >&2; return 1; }
+    while IFS= read -r line || [ -n "$line" ]; do
+        lines+=("$line")
+        if [ "$line" = "[mcp_servers.$server]" ]; then
+            lines+=("env_vars = [$list]")
+            found=1
+        fi
+    done < "$config"
+    [ "$found" -eq 1 ] || { echo "[mcp_servers.$server] not found in $config" >&2; return 1; }
+    printf '%s\n' "${lines[@]}" > "$config"
+}
+
+forward_codex_keys() {
+    local server="$1" keys
+    shift
+    keys="$(codex_env_keys "$@")"
+    [ -n "$keys" ] || return 0
+    if ! run_step "$server API key forwarding ($keys)" add_codex_env_vars "$server" "$keys"; then
+        fail "Could not add env_vars = [$keys] to [mcp_servers.$server] in $DELEGATE_CODEX_HOME/config.toml."
+    fi
+}
+
 echo -e "${BLUE}[2/4]${NC} Building agent package"
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
     [ -d "$AGENT_DIR" ] || fail "Agent package not found: $AGENT_DIR"
     build_agent() { (cd "$AGENT_DIR" && npm ci && npm run build); }
     if ! run_step "MCP servers" build_agent; then
@@ -345,6 +399,7 @@ if [ "$INSTALL_ROSALIND" -eq 1 ]; then
     if ! run_step "rosalind-delegate → Codex" codex mcp add rosalind-delegate "${ROSALIND_SERVER_ENV[@]}" -- node "$ROSALIND_CODEX_SERVER_PATH"; then
         fail "Could not register rosalind-delegate for Codex. Fix the Codex CLI error above and rerun setup."
     fi
+    forward_codex_keys rosalind-delegate "$DELEGATE_CODEX_HOME/config.toml" "$ROSALIND_PROFILE_FILE"
     if ! run_step "rosalind-delegate skills" install_skill "$SCRIPT_DIR/.claude/skills/rosalind-delegate" "$HOME/.claude/skills/rosalind-delegate"; then
         fail "Could not install the Claude Rosalind skill."
     fi
@@ -369,6 +424,19 @@ if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     fi
 fi
 
+if [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+    CODEX_CODEX_SERVER_PATH="$AGENT_DIR/dist/codexCodexMcp.js"
+    [ -f "$CODEX_CODEX_SERVER_PATH" ] || fail "MCP build output not found: $CODEX_CODEX_SERVER_PATH"
+    run_logged codex mcp remove codex-delegate || true
+    if ! run_step "codex-delegate → Codex" codex mcp add codex-delegate --env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR" --env "CODEX_HOME=$DELEGATE_CODEX_HOME" -- node "$CODEX_CODEX_SERVER_PATH"; then
+        fail "Could not register codex-delegate for Codex. Fix the Codex CLI error above and rerun setup."
+    fi
+    forward_codex_keys codex-delegate "$DELEGATE_CODEX_HOME/config.toml"
+    if ! run_step "codex-delegate Codex skill" install_skill "$SCRIPT_DIR/.codex/skills/codex-delegate" "$DELEGATE_CODEX_HOME/skills/codex-delegate"; then
+        fail "Could not install the Codex codex-delegate skill."
+    fi
+fi
+
 echo -e "${BLUE}[4/4]${NC} Finalizing"
 echo -e "  ${GREEN}done${NC}"
 echo ""
@@ -389,4 +457,8 @@ if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     echo "Restart Codex to load Claude's review, implementation, plan-review, and custom task tools."
     echo "Jobs: delegate_claude_status, delegate_claude_list, delegate_claude_cancel"
     echo "Check registration: codex mcp get claude-delegate"
+fi
+if [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+    echo "Restart Codex to load the delegate_codex_* tools. Workers use the default Codex configuration, not the session's profile."
+    echo "Check registration: codex mcp get codex-delegate"
 fi

@@ -12,6 +12,7 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "start": "node dist/cli.js",
     "mcp": "node dist/mcp.js",
+    "codex-codex-mcp": "node dist/codexCodexMcp.js",
     "claude-mcp": "node dist/claudeMcp.js",
     "rosalind-mcp": "node dist/rosalindMcp.js",
     "rosalind-codex-mcp": "node dist/rosalindCodexMcp.js",

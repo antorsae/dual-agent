@@ -1,6 +1,6 @@
 # Dual Agent Development Environment
 
-Let **Claude Code delegate to Codex**, **Codex delegate to Claude**, and either host delegate to Codex through the **Rosalind** profile, through MCP. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control.
+Let **Claude Code delegate to Codex**, **Codex delegate to Claude** or to a separate Codex worker, and either host delegate to Codex through the **Rosalind** profile, through MCP. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control.
 
 ## Installation
 
@@ -17,9 +17,12 @@ Setup asks which integrations to install:
 | 1 | Use Codex from Claude Code — MCP tools and skill |
 | 2 | Use Claude from Codex — MCP tools and skill |
 | 3 | Use Rosalind (Codex profile) from Claude Code and Codex |
+| 4 | Use Codex from Codex — MCP tools and skill |
 
 Toggle the choices you want, then press `c` to install. Select **1 and 2** for
 both delegation directions. Choose 3 to install the Rosalind server in both hosts.
+Choose 4 to let Codex delegate to a separate Codex worker that uses your default
+Codex configuration, for example from a session started with another profile.
 Each delegation choice installs its MCP server registration and host skill.
 
 Restart Claude Code and Codex to discover the tools and their companion skills. You can describe the work normally:
@@ -75,6 +78,16 @@ prefix:
 
 Rosalind runs the selected `codex-pool` or `codex` executable with the
 `-p rosalind_delegate` profile.
+
+Choice 4 adds the same `delegate_codex_*` tools to Codex. Plain Codex workers
+get no `-p` option, so they use the default configuration in the registered
+`CODEX_HOME`, whichever profile the calling session uses.
+
+Codex starts MCP servers with a minimal environment that drops provider API
+keys. For the Codex-hosted Codex and Rosalind servers, setup lists every
+`env_key` from `config.toml` (and the Rosalind profile) in the registration's
+`env_vars`, so Codex forwards those variables. Rerun setup after adding a
+provider that reads its key from a new variable.
 
 Delegation inputs are `prompt` (or `plan` for plan review), `cwd`, optional `files`, optional `mode`, `wait`, and `timeout_ms`. `files` accepts an array or a comma-separated string.
 
@@ -157,6 +170,7 @@ These explicit options skip the interactive questions:
 | `--codex-mcp` (or `--mcp`) | Codex delegation for Claude Code |
 | `--claude-mcp` | Claude delegation for Codex |
 | `--rosalind-mcp` | Rosalind delegation for Claude Code and Codex |
+| `--codex-from-codex` | Codex delegation for Codex |
 | `--all` | All delegation integrations |
 
 Build and registration errors stop setup with the underlying diagnostic. Setup does not write project context or `.gitignore` files.
@@ -180,6 +194,7 @@ This CLI shares the delegation job store and edit locks. Its default timeout is 
 claude mcp get codex-delegate
 claude mcp get rosalind-delegate
 codex mcp get claude-delegate
+codex mcp get codex-delegate
 codex mcp get rosalind-delegate
 ```
 

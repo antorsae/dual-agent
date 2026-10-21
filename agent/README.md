@@ -1,6 +1,6 @@
 # Delegation servers and CLI
 
-`mcp.ts` exposes Codex delegation to Claude Code. `claudeMcp.ts` exposes Claude delegation to Codex. Both use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
+`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
 
 ## Build and registration
 
@@ -11,7 +11,8 @@ npm run build
 
 Run the repository's `./setup-dual-agent.sh` to choose integrations interactively.
 Choice 1 installs Codex delegation for Claude Code; choice 2 installs Claude
-delegation for Codex; choice 3 installs Rosalind delegation for both hosts.
+delegation for Codex; choice 3 installs Rosalind delegation for both hosts;
+choice 4 installs Codex delegation for Codex.
 Each includes the MCP registration and companion host skill. Select the choices
 you need, or use `--both` for the two original directions. For manual
 registration, use the same absolute state directory in all commands:
@@ -38,11 +39,22 @@ codex mcp add rosalind-delegate \
   --env CODEX_HOME=/absolute/path/to/codex-home \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/rosalindCodexMcp.js
+
+codex mcp add codex-delegate \
+  --env CODEX_BIN=codex-pool \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  -- node /FULL/PATH/TO/agent/dist/codexCodexMcp.js
 ```
 
-Restart the hosts to discover the tools. `npm run mcp`, `npm run claude-mcp`,
-`npm run rosalind-mcp`, and `npm run rosalind-codex-mcp` are the corresponding
-stdio entrypoints. Setup also persists `CODEX_HOME` for the Codex worker, and
+Codex gives MCP servers only a minimal environment. If a Codex model provider
+reads its API key from a variable (`env_key`), add `env_vars = ["THAT_VARIABLE"]`
+under `[mcp_servers.codex-delegate]` and `[mcp_servers.rosalind-delegate]` in
+Codex's `config.toml`. `codex mcp add` has no option for this; setup adds it.
+
+Restart the hosts to discover the tools. `npm run mcp`, `npm run codex-codex-mcp`,
+`npm run claude-mcp`, `npm run rosalind-mcp`, and `npm run rosalind-codex-mcp`
+are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for the Codex worker, and
 `CLAUDE_CONFIG_DIR` for the Claude worker when configured.
 
 Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
@@ -99,8 +111,9 @@ channels. See the [channel reference](https://code.claude.com/docs/en/channels-r
 With channels explicitly enabled, Claude can do independent work and collect
 the result when notified. Otherwise, keep using status calls with
 `wait_ms: 30000` until the job finishes. The server cannot tell whether Claude
-enabled or received its channel events. The reverse `claude-delegate` server
-uses status waits; it does not advertise Claude's channel capability to Codex.
+enabled or received its channel events. The reverse `claude-delegate` server and
+the Codex-hosted `codex-delegate` registration use status waits; they do not
+advertise Claude's channel capability to Codex.
 
 The Claude-hosted `rosalind-delegate` server uses the same channel behavior with
 `delegate_rosalind_status`. Its Codex-hosted registration uses bounded status
@@ -117,7 +130,7 @@ collected through a waiting call does not need to be presented again.
 
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
-- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`. All delegation MCP servers are disabled in the child invocation.
+- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`; plain Codex jobs pass no profile, so they use the default configuration of the registered `CODEX_HOME`, not the calling session's profile. All delegation MCP servers are disabled in the child invocation.
 - Claude: `--print --output-format json`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate

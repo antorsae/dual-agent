@@ -43,7 +43,7 @@ async function fixture(t) {
   });
   async function connect(provider = "codex", overrides = {}, cwd = root, host = "claude") {
     const server = provider === "codex"
-      ? "../dist/mcp.js"
+      ? host === "codex" ? "../dist/codexCodexMcp.js" : "../dist/mcp.js"
       : provider === "claude"
         ? "../dist/claudeMcp.js"
         : host === "codex"
@@ -110,6 +110,22 @@ test("Rosalind exposes the same tools and uses its Codex profile", async t => {
   assert.equal(event.meta.task_type, "custom");
   assert.equal(event.meta.status, "completed");
   assert.match(event.content, /delegate_rosalind_status/);
+});
+
+test("Codex-hosted Codex delegation uses the default profile without the Claude channel", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("codex", {}, f.project, "codex");
+  assert.equal((await c.client.listTools()).tools.length, 7);
+  assert.equal(c.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+  assert.equal(c.client.getInstructions(), undefined);
+  const result = await c.call("_review", { prompt: "Review from a Codex host", wait: true });
+  assert.equal(result.structuredContent.status, "completed", text(result));
+  assert.equal(result.structuredContent.provider, "codex");
+  assert.equal(result.structuredContent.cwd, f.project);
+  const request = (await f.requests()).at(-1);
+  assert.ok(!request.args.includes("-p"));
+  assert.ok(request.args.some(arg => arg.includes("codex-delegate") && arg.includes("enabled=false")));
+  assert.equal(c.channelEvents.length, 0);
 });
 
 for (const provider of ["codex", "claude"]) {

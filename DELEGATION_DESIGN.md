@@ -61,7 +61,9 @@ Provider settings and project instructions remain native to the installed CLIs. 
 
 ## Host discovery and prompts
 
-`codex-delegate` exposes Codex tools to Claude Code; `claude-delegate` exposes Claude tools to Codex; `rosalind-delegate` exposes the same Codex-backed tools to both hosts while selecting the `rosalind_delegate` Codex profile. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
+`codex-delegate` exposes Codex tools to Claude Code and, optionally, to Codex; `claude-delegate` exposes Claude tools to Codex; `rosalind-delegate` exposes the same Codex-backed tools to both hosts while selecting the `rosalind_delegate` Codex profile. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
+
+A plain Codex worker passes no profile, so it uses the default configuration rather than the calling session's profile. Codex starts stdio MCP servers with a minimal environment, so the Codex-hosted Codex and Rosalind registrations list provider API key variables in `env_vars`.
 
 The installed host skills describe when an independent review is useful and how to gather a result. They guide proactive selection for substantial work while avoiding unnecessary delegation for trivial tasks. The host still decides whether to call a tool. Users do not maintain a fixed prompt or type a subprocess command.
 

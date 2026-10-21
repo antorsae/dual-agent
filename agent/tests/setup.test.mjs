@@ -22,12 +22,13 @@ async function fixture(t, missingBinaries = []) {
     // Redirect managed files without changing the process HOME.
     await writeFile(join(dir, script), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
   }
-  for (const [role, skill] of [[".claude", "codex-delegate"], [".codex", "claude-delegate"], [".claude", "rosalind-delegate"], [".codex", "rosalind-delegate"]]) {
+  for (const [role, skill] of [[".claude", "codex-delegate"], [".codex", "claude-delegate"], [".codex", "codex-delegate"], [".claude", "rosalind-delegate"], [".codex", "rosalind-delegate"]]) {
     const path = join(dir, role, "skills", skill);
     await mkdir(path, { recursive: true });
     await writeFile(join(path, "SKILL.md"), skill + " fixture");
   }
   await writeFile(join(dir, "agent", "dist", "mcp.js"), "");
+  await writeFile(join(dir, "agent", "dist", "codexCodexMcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "claudeMcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "rosalindMcp.js"), "");
   await writeFile(join(dir, "agent", "dist", "rosalindCodexMcp.js"), "");
@@ -49,13 +50,24 @@ async function fixture(t, missingBinaries = []) {
     'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
     'if (name.startsWith("custom codex")) { process.stdin.resume(); process.stdin.on("end", () => { if (args.includes("--output-last-message")) fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "custom executable"); }); }',
+    // Mirror the table layout that codex mcp add/remove write to config.toml.
+    'if (name === "codex" && args[0] === "mcp" && ["add", "remove"].includes(args[1]) && process.env.DUAL_AGENT_TEST_NO_CONFIG !== "1") {',
+    '  const path = require("node:path");',
+    '  const config = path.join(process.env.CODEX_HOME || path.join(process.env.DUAL_AGENT_TEST_HOME, ".codex"), "config.toml");',
+    '  const table = `[mcp_servers.${args[2]}`;',
+    '  const sections = (fs.existsSync(config) ? fs.readFileSync(config, "utf8") : "").split(/^(?=\\[)/m)',
+    '    .filter(section => !section.startsWith(table + "]") && !section.startsWith(table + "."));',
+    '  if (args[1] === "add") sections.push(`${table}]\\ncommand = "node"\\n\\n${table}.env]\\nFIXTURE = "1"\\n`);',
+    '  fs.mkdirSync(path.dirname(config), { recursive: true });',
+    '  fs.writeFileSync(config, sections.join(""));',
+    '}',
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
   for (const file of ["claude", "codex", "codex-pool", "npm", "custom codex $'quoted"]) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
-  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND"]) delete env[key];
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG"]) delete env[key];
   async function runScript(script, args, input, overrides, expectedStatus) {
     const result = spawnSync("bash", [join(dir, script), ...args], {
       cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
@@ -73,8 +85,8 @@ async function fixture(t, missingBinaries = []) {
   };
 }
 
-function registrationEnv(calls, name) {
-  const call = calls.find((call) => call.name === name && call.args[1] === "add");
+function registrationEnv(calls, name, server) {
+  const call = calls.find((call) => call.name === name && call.args[1] === "add" && (!server || call.args[2] === server));
   assert.ok(call, "expected an MCP registration");
   const env = {};
   for (let i = 0; i < call.args.length; i++) {
@@ -146,9 +158,10 @@ test("does not replace an unavailable custom CODEX_BIN", async (t) => {
 
 test("registers all delegation integrations from the component menu", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], "123c");
+  const { calls } = await f.run([], "1234c");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
-  assert.equal(registrationEnv(calls, "codex").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(registrationEnv(calls, "codex", "rosalind-delegate").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(registrationEnv(calls, "codex", "codex-delegate").CODEX_BIN, "codex-pool");
 });
 
 test("repeated setup preserves project data and Claude settings", async (t) => {
@@ -283,9 +296,10 @@ test("select all includes Claude delegation with the other integrations", async 
   const f = await fixture(t);
   const { calls } = await f.run([], "ac");
   const codexServers = calls.filter(call => call.name === "codex" && call.args[1] === "add").map(call => call.args[2]);
-  assert.deepEqual(codexServers.sort(), ["claude-delegate", "rosalind-delegate"]);
+  assert.deepEqual(codexServers.sort(), ["claude-delegate", "codex-delegate", "rosalind-delegate"]);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   await access(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"));
+  await access(join(f.testHome, ".codex/skills/codex-delegate/SKILL.md"));
 });
 
 test("explicit Codex flag installs the same integration as the legacy alias", async (t) => {
@@ -319,4 +333,59 @@ test("Rosalind setup fails before registration when its Codex profile is missing
   const { calls, output } = await f.run(["--rosalind-mcp"], "", {}, 1);
   assert.match(output, /Rosalind Codex profile not found/);
   assert.deepEqual(calls, []);
+});
+
+test("Codex-from-Codex registers codex-delegate in Codex and forwards provider API keys", async (t) => {
+  const f = await fixture(t);
+  const config = join(f.testHome, ".codex/config.toml");
+  await writeFile(config, 'model_provider = "pool"\n\n[model_providers.pool]\nenv_key = "POOL_API_KEY"\n');
+  const { calls, output } = await f.run(["--codex-from-codex"]);
+  const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
+  assert.deepEqual(registrations.map(call => [call.name, call.args[2]]), [["codex", "codex-delegate"]]);
+  assert.ok(registrations[0].args.at(-1).endsWith("/codexCodexMcp.js"));
+  const saved = registrationEnv(calls, "codex", "codex-delegate");
+  assert.equal(saved.CODEX_BIN, "codex-pool");
+  assert.equal(saved.CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(saved.DUAL_AGENT_STATE_DIR, join(f.testHome, ".local/state/dual-agent"));
+  assert.match(output, /codex-delegate API key forwarding \(POOL_API_KEY\)/);
+  assert.match(await readFile(config, "utf8"), /^\[mcp_servers\.codex-delegate\]\nenv_vars = \["POOL_API_KEY"\]\ncommand = "node"$/m);
+  assert.equal(await readFile(join(f.testHome, ".codex/skills/codex-delegate/SKILL.md"), "utf8"), "codex-delegate fixture");
+  await assert.rejects(access(join(f.testHome, ".claude/skills/codex-delegate")), { code: "ENOENT" });
+});
+
+test("Rosalind's Codex registration forwards keys from the base config and its profile", async (t) => {
+  const f = await fixture(t);
+  const config = join(f.testHome, ".codex/config.toml");
+  await writeFile(config, '[model_providers.pool]\nenv_key = "POOL_API_KEY"\n');
+  await writeFile(join(f.testHome, ".codex/rosalind_delegate.config.toml"),
+    "model_provider = 'rosalind'\nmodel_providers.rosalind = { name = 'rosalind', env_key = 'ROSALIND_KEY' }\n" +
+    '[model_providers.pool]\nenv_key = "POOL_API_KEY"\n');
+  await f.run(["--rosalind-mcp"]);
+  assert.match(await readFile(config, "utf8"), /^\[mcp_servers\.rosalind-delegate\]\nenv_vars = \["POOL_API_KEY", "ROSALIND_KEY"\]$/m);
+});
+
+test("Codex registrations without provider API keys need no env_vars", async (t) => {
+  const f = await fixture(t);
+  await f.run(["--codex-from-codex"]);
+  const config = await readFile(join(f.testHome, ".codex/config.toml"), "utf8");
+  assert.match(config, /\[mcp_servers\.codex-delegate\]/);
+  assert.doesNotMatch(config, /env_vars/);
+});
+
+test("API key forwarding fails setup when the Codex registration table is missing", async (t) => {
+  const f = await fixture(t);
+  await writeFile(join(f.testHome, ".codex/config.toml"), '[model_providers.pool]\nenv_key = "POOL_API_KEY"\n');
+  const { output } = await f.run(["--codex-from-codex"], "", { DUAL_AGENT_TEST_NO_CONFIG: "1" }, 1);
+  assert.match(output, /Could not add env_vars = \[POOL_API_KEY\] to \[mcp_servers\.codex-delegate\]/);
+  assert.doesNotMatch(output, /Setup Complete/);
+});
+
+test("uninstall removes Codex-hosted Codex delegation and its skill", async (t) => {
+  const f = await fixture(t);
+  const installed = (await f.run(["--codex-from-codex"])).calls.length;
+  await access(join(f.testHome, ".codex/skills/codex-delegate/SKILL.md"));
+  const { calls } = await f.uninstall();
+  assert.ok(calls.slice(installed).some(call => call.name === "codex" && call.args[1] === "remove" && call.args[2] === "codex-delegate"));
+  await assert.rejects(access(join(f.testHome, ".codex/skills/codex-delegate")), { code: "ENOENT" });
+  assert.doesNotMatch(await readFile(join(f.testHome, ".codex/config.toml"), "utf8"), /codex-delegate/);
 });
