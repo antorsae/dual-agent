@@ -44,6 +44,15 @@ CODEX_BIN=/absolute/path/to/codex CLAUDE_BIN=/absolute/path/to/claude ./setup-du
 
 Each worker uses its own CLI authentication and model configuration. The Claude worker keeps subscription authentication available and does not use `--bare`.
 
+Headless Claude ignores `effortLevel` from Claude settings, so Claude workers
+run at the model's default effort. To choose one, set `CLAUDE_CODE_EFFORT_LEVEL`
+(`low`, `medium`, `high`, `xhigh`, or `max`) when installing Claude delegation.
+Setup saves it in the registration and keeps it when setup reruns without it:
+
+```bash
+CLAUDE_CODE_EFFORT_LEVEL=max ./setup-dual-agent.sh --claude-mcp
+```
+
 Rosalind setup requires the Codex profile file
 `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 `~/.codex/rosalind_delegate.config.toml`). Setup validates the existing profile

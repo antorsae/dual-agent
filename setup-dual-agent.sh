@@ -350,6 +350,20 @@ add_codex_env_vars() {
     printf '%s\n' "${lines[@]}" > "$config"
 }
 
+# Read a value saved in a Codex MCP registration's [mcp_servers.<name>.env] table.
+codex_registration_env() {
+    local server="$1" key="$2" config="$DELEGATE_CODEX_HOME/config.toml" line section=""
+    local pattern="^${key}[[:space:]]*=[[:space:]]*\"([^\"]*)\""
+    [ -f "$config" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        [[ "$line" == "["* ]] && section="$line"
+        if [ "$section" = "[mcp_servers.$server.env]" ] && [[ "$line" =~ $pattern ]]; then
+            printf '%s' "${BASH_REMATCH[1]}"
+            return 0
+        fi
+    done < "$config"
+}
+
 forward_codex_keys() {
     local server="$1" keys
     shift
@@ -415,6 +429,12 @@ if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
         CLAUDE_SERVER_ENV+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR")
     fi
+    # Headless claude -p ignores effortLevel from Claude settings. Keep a saved
+    # worker effort unless CLAUDE_CODE_EFFORT_LEVEL selects a new one.
+    CLAUDE_WORKER_EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-$(codex_registration_env claude-delegate CLAUDE_CODE_EFFORT_LEVEL)}"
+    if [ -n "$CLAUDE_WORKER_EFFORT" ]; then
+        CLAUDE_SERVER_ENV+=(--env "CLAUDE_CODE_EFFORT_LEVEL=$CLAUDE_WORKER_EFFORT")
+    fi
     run_logged codex mcp remove claude-delegate || true
     if ! run_step "claude-delegate → Codex" codex mcp add claude-delegate "${CLAUDE_SERVER_ENV[@]}" -- node "$CLAUDE_MCP_SERVER_PATH"; then
         fail "Could not register claude-delegate. Fix the Codex CLI error above and rerun setup."
@@ -457,6 +477,9 @@ if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     echo "Restart Codex to load Claude's review, implementation, plan-review, and custom task tools."
     echo "Jobs: delegate_claude_status, delegate_claude_list, delegate_claude_cancel"
     echo "Check registration: codex mcp get claude-delegate"
+    if [ -n "$CLAUDE_WORKER_EFFORT" ]; then
+        echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"
+    fi
 fi
 if [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
     echo "Restart Codex to load the delegate_codex_* tools. Workers use the default Codex configuration, not the session's profile."

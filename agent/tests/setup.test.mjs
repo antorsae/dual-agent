@@ -57,7 +57,9 @@ async function fixture(t, missingBinaries = []) {
     '  const table = `[mcp_servers.${args[2]}`;',
     '  const sections = (fs.existsSync(config) ? fs.readFileSync(config, "utf8") : "").split(/^(?=\\[)/m)',
     '    .filter(section => !section.startsWith(table + "]") && !section.startsWith(table + "."));',
-    '  if (args[1] === "add") sections.push(`${table}]\\ncommand = "node"\\n\\n${table}.env]\\nFIXTURE = "1"\\n`);',
+    '  const env = [];',
+    '  for (let i = 0; i < args.length; i++) if (args[i] === "--env") { const [key, ...value] = args[++i].split("="); env.push(`${key} = ${JSON.stringify(value.join("="))}`); }',
+    '  if (args[1] === "add") sections.push(`${table}]\\ncommand = "node"\\n\\n${table}.env]\\n${env.join("\\n")}\\n`);',
     '  fs.mkdirSync(path.dirname(config), { recursive: true });',
     '  fs.writeFileSync(config, sections.join(""));',
     '}',
@@ -67,7 +69,7 @@ async function fixture(t, missingBinaries = []) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
-  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG"]) delete env[key];
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL"]) delete env[key];
   async function runScript(script, args, input, overrides, expectedStatus) {
     const result = spawnSync("bash", [join(dir, script), ...args], {
       cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
@@ -237,6 +239,7 @@ test("installs both delegation directions with the same state path", async (t) =
   assert.equal(forward.DUAL_AGENT_STATE_DIR, state);
   assert.equal(reverse.DUAL_AGENT_STATE_DIR, state);
   assert.equal(reverse.CLAUDE_BIN, join(f.dir, "bin/claude"));
+  assert.equal(reverse.CLAUDE_CODE_EFFORT_LEVEL, undefined);
   assert.equal(await readFile(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"), "utf8"), "claude-delegate fixture");
   assert.equal(await readFile(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"), "utf8"), "codex-delegate fixture");
 });
@@ -378,6 +381,16 @@ test("API key forwarding fails setup when the Codex registration table is missin
   const { output } = await f.run(["--codex-from-codex"], "", { DUAL_AGENT_TEST_NO_CONFIG: "1" }, 1);
   assert.match(output, /Could not add env_vars = \[POOL_API_KEY\] to \[mcp_servers\.codex-delegate\]/);
   assert.doesNotMatch(output, /Setup Complete/);
+});
+
+test("setup saves the Claude worker effort and keeps it when rerun without one", async (t) => {
+  const f = await fixture(t);
+  const lastEffort = calls => registrationEnv([calls.filter(call => call.name === "codex" && call.args[1] === "add").at(-1)], "codex", "claude-delegate").CLAUDE_CODE_EFFORT_LEVEL;
+  const first = await f.run(["--claude-mcp"], "", { CLAUDE_CODE_EFFORT_LEVEL: "max" });
+  assert.equal(lastEffort(first.calls), "max");
+  assert.match(first.output, /Claude worker effort: max/);
+  assert.equal(lastEffort((await f.run(["--both"])).calls), "max");
+  assert.equal(lastEffort((await f.run(["--claude-mcp"], "", { CLAUDE_CODE_EFFORT_LEVEL: "high" })).calls), "high");
 });
 
 test("uninstall removes Codex-hosted Codex delegation and its skill", async (t) => {

@@ -54,8 +54,9 @@ Codex's `config.toml`. `codex mcp add` has no option for this; setup adds it.
 
 Restart the hosts to discover the tools. `npm run mcp`, `npm run codex-codex-mcp`,
 `npm run claude-mcp`, `npm run rosalind-mcp`, and `npm run rosalind-codex-mcp`
-are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for the Codex worker, and
-`CLAUDE_CONFIG_DIR` for the Claude worker when configured.
+are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for
+the Codex worker, and `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_EFFORT_LEVEL` for the
+Claude worker when configured; a saved effort is kept when setup reruns without it.
 
 Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 `~/.codex/rosalind_delegate.config.toml`). Setup validates the existing profile
