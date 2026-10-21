@@ -147,6 +147,7 @@ for (const provider of ["codex", "claude"]) {
       } else {
         assert.equal(c.channelEvents.length, 0);
         assert.equal(request.args[request.args.indexOf("--tools") + 1], "Read,Glob,Grep");
+        assert.equal(request.args[request.args.indexOf("--allowedTools") + 1], "Read(//**)");
         assert.ok(request.args.includes("--strict-mcp-config"));
         assert.ok(request.args.includes("dontAsk"));
         assert.ok(!request.args.includes("--bare"));
@@ -297,6 +298,7 @@ test("one edit lock spans both providers, symlinks, and Git subdirectories", asy
   const request = (await f.requests()).at(-1);
   assert.equal(request.args[request.args.indexOf("--permission-mode") + 1], "auto");
   assert.ok(request.args.includes("Read,Glob,Grep,Edit,Write,Bash"));
+  assert.ok(!request.args.includes("--allowedTools"));
 });
 
 test("another live server can cancel a job and its resistant descendants", async t => {

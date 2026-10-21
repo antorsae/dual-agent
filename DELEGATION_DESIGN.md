@@ -55,7 +55,7 @@ The caller authorizes the project directory. Codex workers pass
 The override is per invocation and does not update global project trust or
 translate permissions between Claude and Codex.
 
-Codex uses its read-only sandbox with approval escalation disabled for read-only tasks, and automatic approval review for editing. Claude exposes only file-reading tools in read-only mode, and file editing/Bash tools under automatic permission review for editing. Claude's tool restriction does not add an OS sandbox around CLI startup customizations. Permission denials are reported as a failed job, preserving the answer and logs for inspection.
+Codex uses its read-only sandbox with approval escalation disabled for read-only tasks, and automatic approval review for editing. Claude exposes only file-reading tools in read-only mode, allowed to read outside the project like Codex's read-only sandbox, and file editing/Bash tools under automatic permission review for editing. Claude's tool restriction does not add an OS sandbox around CLI startup customizations. Permission denials are reported as a failed job, preserving the answer and logs for inspection.
 
 Provider settings and project instructions remain native to the installed CLIs. Workers receive an instruction to complete the task themselves. Claude starts with an empty MCP configuration and disabled skills, while Codex disables all delegation servers. This prevents recursive handoffs.
 

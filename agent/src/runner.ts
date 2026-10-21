@@ -37,7 +37,10 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
     args: ["--print", "--output-format", "json", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
       "--disable-slash-commands", "--no-chrome", "--permission-prompts", "none",
       "--permission-mode", job.mode === "edit" ? "auto" : "dontAsk",
-      "--tools", job.mode === "edit" ? "Read,Glob,Grep,Edit,Write,Bash" : "Read,Glob,Grep"],
+      "--tools", job.mode === "edit" ? "Read,Glob,Grep,Edit,Write,Bash" : "Read,Glob,Grep",
+      // dontAsk denies reads outside cwd. Like Codex's read-only sandbox, let
+      // read-only jobs read anywhere; this Read rule also covers Glob and Grep.
+      ...(job.mode === "edit" ? [] : ["--allowedTools", "Read(//**)"])],
   };
 }
 

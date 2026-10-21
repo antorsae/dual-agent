@@ -141,7 +141,7 @@ directories outside Git repositories. They do not require a second Git-directory
 check. This shares the host's directory choice; each CLI still applies its own
 tool permissions and project-configuration trust rules.
 
-Codex reviews run in its read-only sandbox with approval escalation disabled. Claude reviews receive only `Read`, `Glob`, and `Grep` tools. Claude edits use automatic permission review; unavailable permissions or denied tool calls produce a failed job with the available result for inspection. Claude's read-only mode is a tool restriction, not an additional operating-system sandbox around its startup hooks or extensions.
+Codex reviews run in its read-only sandbox with approval escalation disabled. Claude reviews receive only `Read`, `Glob`, and `Grep` tools, which may read files anywhere, as Codex's read-only sandbox can. Claude edits use automatic permission review; unavailable permissions or denied tool calls produce a failed job with the available result for inspection. Claude's read-only mode is a tool restriction, not an additional operating-system sandbox around its startup hooks or extensions.
 
 Workers are told to complete their assigned task themselves. Claude workers load no configured MCP servers; Codex workers disable all three delegation servers to avoid recursive handoffs. Project guidance continues to use the native `AGENTS.md` and `CLAUDE.md` conventions.
 
