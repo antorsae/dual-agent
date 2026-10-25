@@ -85,7 +85,7 @@ the server in the session's project. Pass `cwd` explicitly for another project,
 or when the host changes projects after the server has started. Symlinks are
 resolved before choosing the workspace lock.
 
-Results include text and structured content: task ID, status, provider, execution mode, project/workspace, error, session ID, log/result paths, and a result excerpt. Large answers are capped at 64000 characters in the tool response, with the complete result on disk.
+Results include text and structured content: task ID, status, provider, execution mode, project/workspace, error, session ID, log/result paths, and a result excerpt. The text also shows elapsed time, output bytes, and, while the job runs, the time since the worker's last output. Large answers are capped at 64000 characters in the tool response, with the complete result on disk.
 
 Status values are `running`, `completed`, `failed`, `cancelled`, and `interrupted`. Submit long tasks in background and collect results through channel events or `_status` with a bounded wait. Completed answers remain accessible from a new server instance. `_cancel` writes a cancellation request that the owning server handles using its live child-process handle.
 
@@ -132,14 +132,14 @@ collected through a waiting call does not need to be presented again.
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
 - Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`; plain Codex jobs pass no profile, so they use the default configuration of the registered `CODEX_HOME`, not the calling session's profile. All delegation MCP servers are disabled in the child invocation.
-- Claude: `--print --output-format json`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
+- Claude: `--print --output-format stream-json --verbose`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate
 Git-directory check is skipped so delegation works in non-Git projects too.
 This does not change the job's read-only/edit policy, copy Claude's tool-permission
 rules, or write entries to Codex's project trust configuration.
 
-Stdout and stderr are logged separately from the final answer. Codex uses its final-message file; Claude's JSON `result` and `session_id` are parsed. Failed jobs retain any available final result and diagnostics.
+Stdout and stderr are logged separately from the final answer. Codex uses its final-message file. Claude's event stream supplies the session ID at startup, which cancelled jobs keep, and the answer in its final `result` event; the stream shows progress every few seconds, even while Claude thinks. Failed jobs retain any available final result and diagnostics.
 
 ## State and locks
 

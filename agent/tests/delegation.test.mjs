@@ -162,6 +162,8 @@ for (const provider of ["codex", "claude"]) {
         assert.ok(request.args.some(arg => arg.includes("claude-delegate") && arg.includes("enabled=false")));
       } else {
         assert.equal(c.channelEvents.length, 0);
+        assert.equal(request.args[request.args.indexOf("--output-format") + 1], "stream-json");
+        assert.ok(request.args.includes("--verbose"));
         assert.equal(request.args[request.args.indexOf("--tools") + 1], "Read,Glob,Grep");
         assert.equal(request.args[request.args.indexOf("--allowedTools") + 1], "Read(//**)");
         assert.ok(request.args.includes("--strict-mcp-config"));
@@ -233,6 +235,36 @@ test("results and task lists persist across MCP restarts", async t => {
   assert.ok(list.structuredContent.jobs.some(job => job.task_id === id));
   const wrong = await f.connect("codex");
   assert.equal((await wrong.call("_status", { task_id: id })).isError, true);
+});
+
+test("status shows a running Claude job's streamed progress, and cancellation keeps its session", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("claude");
+  const started = await c.call("", { prompt: "[hold] keep thinking", cwd: f.project });
+  const id = started.structuredContent.task_id;
+  const stdoutBytes = result => Number(text(result).match(/\*\*Output bytes\*\*: (\d+) stdout/)[1]);
+  const first = await eventually(async () => {
+    const status = await c.call("_status", { task_id: id });
+    return stdoutBytes(status) > 0 && status;
+  });
+  assert.equal(first.structuredContent.status, "running");
+  assert.match(text(first), /\*\*Elapsed\*\*: \d+s/);
+  assert.match(text(first), /last output \d+s ago/);
+  assert.match(text(first), /Cancelling discards its unfinished answer/);
+  await eventually(async () => stdoutBytes(await c.call("_status", { task_id: id })) > stdoutBytes(first));
+  const cancelled = await c.call("_cancel", { task_id: id });
+  assert.equal(cancelled.structuredContent.status, "cancelled", text(cancelled));
+  assert.equal(cancelled.structuredContent.session_id, "fixture-claude-session");
+  assert.match(text(cancelled), /\*\*Duration\*\*: \d+s/);
+  assert.doesNotMatch(text(cancelled), /last output|Cancelling discards/);
+});
+
+test("Claude results keep multibyte characters split across stream reads", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("claude");
+  const result = await c.call("", { prompt: "[unicode]", cwd: f.project, wait: true });
+  assert.equal(result.structuredContent.status, "completed", text(result));
+  assert.equal(await readFile(result.structuredContent.paths.result, "utf8"), "é€😀".repeat(1000));
 });
 
 test("uses bounded status waiting for background jobs", async t => {

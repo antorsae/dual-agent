@@ -3,7 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { JobManager } from "./jobs.js";
-import { notifyChannel } from "./notifications.js";
+import { formatDuration, notifyChannel } from "./notifications.js";
 import { ExecutionMode, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
 
 const MAX_RESULT_CHARS = 64000;
@@ -52,6 +52,8 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ? `If this session explicitly enabled the ${channelSource} channel, await its completion event while doing independent work, then fetch the result with ${prefix}_status. ` +
       `If channel delivery is unavailable or uncertain: ${statusGuidance}`
     : statusGuidance) + " A running job is not a finished answer.";
+  const runningGuidance = "Recent or growing output shows the worker is active. Cancelling discards its unfinished answer, " +
+    "so keep waiting unless the user asks to stop or the result is no longer needed.";
   const server = new Server({ name: serverName, version: "0.3.0" }, {
     capabilities: { tools: {}, ...(enableChannel ? { experimental: { "claude/channel": {} } } : {}) },
     instructions: enableChannel
@@ -94,7 +96,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     { name: `${prefix}_list`, description: `List recent persistent ${label} jobs, their status, and workspace.`, inputSchema: {
       type: "object" as const, additionalProperties: false, properties: { limit: { type: "integer", minimum: 1, maximum: 100 } },
     } },
-    { name: `${prefix}_cancel`, description: `Cancel a running ${label} job, stop its worker process group, and preserve its diagnostics. Can request cancellation from another live server instance.`, inputSchema: {
+    { name: `${prefix}_cancel`, description: `Cancel a running ${label} job, stop its worker process group, and preserve its diagnostics. Cancelling discards the unfinished answer; do not cancel only because a job is slow, as reviews can take from minutes to over an hour. Can request cancellation from another live server instance.`, inputSchema: {
       type: "object" as const, additionalProperties: false, properties: { task_id: taskId }, required: ["task_id"],
     } },
   ];
@@ -108,16 +110,23 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     };
     const output = isFinished(job) ? await manager.store.result(job.id) : "";
     const cancelRequested = await manager.store.cancellationRequested(job.id);
-    const bytes = await Promise.all([paths.stdout, paths.stderr].map(path => stat(path).then(s => s.size).catch(() => 0)));
+    const logs = await Promise.all([paths.stdout, paths.stderr].map(path => stat(path).catch(() => undefined)));
+    const bytes = logs.map(log => log?.size ?? 0);
+    const now = Date.now();
+    const elapsed = formatDuration((job.endedAt ? Date.parse(job.endedAt) : now) - Date.parse(job.createdAt));
+    // Workers stream events while they run, so the newest log write shows liveness.
+    const lastOutput = Math.max(...logs.map(log => log?.size ? log.mtimeMs : 0));
+    const activity = isFinished(job) ? "" : lastOutput ? `; last output ${formatDuration(Math.max(0, now - lastOutput))} ago` : "; no output yet";
     const excerpt = output.slice(0, MAX_RESULT_CHARS);
     const text = [
       `**Task ID**: ${job.id}`, `**Status**: ${job.status.toUpperCase()}${cancelRequested && !isFinished(job) ? " (cancellation requested)" : ""}`,
       `**Provider / Type / Mode**: ${job.provider} / ${job.type} / ${job.mode}`, `**Project**: ${job.cwd}`, `**Workspace**: ${job.workspace}`,
-      `**Created**: ${job.createdAt}`, `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr`,
+      `**Created**: ${job.createdAt}`, `**${isFinished(job) ? "Duration" : "Elapsed"}**: ${elapsed}`,
+      `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr${activity}`,
       ...(job.sessionId ? [`**Session ID**: ${job.sessionId}`] : []), ...(job.error ? [`**Error**: ${job.error}`] : []),
       `**Metadata**: ${paths.job}`, `**Result**: ${paths.result}`, `**Stdout log**: ${paths.stdout}`, `**Stderr log**: ${paths.stderr}`,
       ...(excerpt ? ["", "## Result", "", excerpt, ...(output.length > excerpt.length ? [`\nResult excerpt truncated. Read the full answer from ${paths.result}.`] : [])] : []),
-      ...(!isFinished(job) ? [`\n${completionGuidance}`] : []),
+      ...(!isFinished(job) ? [`\n${runningGuidance} ${completionGuidance}`] : []),
     ].join("\n");
     return {
       content: [{ type: "text" as const, text }],

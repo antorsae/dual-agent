@@ -15,24 +15,32 @@ const capture = { args, input, cwd: process.cwd(), provider, pid: process.pid };
 if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(capture) + "\n");
 if (process.env.DUAL_AGENT_CAPTURE) writeFileSync(process.env.DUAL_AGENT_CAPTURE, JSON.stringify(capture));
 process.stderr.write("fixture diagnostic\n");
+const emit = event => process.stdout.write(JSON.stringify(event) + "\n");
+if (provider === "claude") emit({ type: "system", subtype: "init", session_id: "fixture-claude-session" });
 if (input.includes("[tree]")) {
   const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "inherit" });
   if (process.env.FAKE_DESCENDANTS) appendFileSync(process.env.FAKE_DESCENDANTS, String(child.pid) + "\n");
 }
 if (input.includes("[ignore-term]")) process.on("SIGTERM", () => {});
 if (input.includes("[hold]")) {
-  setInterval(() => {}, 1000);
+  // Claude streams thinking progress while it works.
+  setInterval(() => { if (provider === "claude") emit({ type: "system", subtype: "thinking_tokens", estimated_tokens: 50 }); }, 100);
 } else {
   setTimeout(() => {
-    const output = process.env.DUAL_AGENT_OUTPUT_SIZE ? "x".repeat(Number(process.env.DUAL_AGENT_OUTPUT_SIZE)) : input.includes("[large]") ? "x".repeat(100000) : "fixture answer\n";
+    const output = process.env.DUAL_AGENT_OUTPUT_SIZE ? "x".repeat(Number(process.env.DUAL_AGENT_OUTPUT_SIZE)) :
+      input.includes("[large]") ? "x".repeat(100000) : input.includes("[unicode]") ? "é€😀".repeat(1000) : "fixture answer\n";
     if (provider === "codex") {
       if (!input.includes("[no-result]")) writeFileSync(args[args.indexOf("--output-last-message") + 1], output);
-      process.stdout.write(JSON.stringify({ type: "thread.started", thread_id: "fixture-codex-session" }) + "\n");
+      emit({ type: "thread.started", thread_id: "fixture-codex-session" });
     } else {
-      process.stdout.write(input.includes("[bad-json]") ? "invalid json\n" : JSON.stringify({
+      const line = Buffer.from(input.includes("[bad-json]") ? "invalid json\n" : JSON.stringify({
         type: "result", result: output, session_id: "fixture-claude-session", is_error: input.includes("[is-error]"),
         permission_denials: input.includes("[denied]") ? [{ tool_name: "Bash" }] : [],
       }) + "\n");
+      // [unicode] splits a multibyte character across writes, as pipe reads can.
+      const cut = input.includes("[unicode]") ? line.indexOf("€") + 1 : line.length;
+      process.stdout.write(line.subarray(0, cut));
+      setTimeout(() => process.stdout.write(line.subarray(cut)), 20);
     }
     process.exitCode = Number(process.env.DUAL_AGENT_EXIT || (input.includes("[fail]") ? 7 : 0));
   }, Number(process.env.DUAL_AGENT_DELAY || (input.includes("[slow]") ? 750 : 0)));

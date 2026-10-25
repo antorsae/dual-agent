@@ -7,7 +7,7 @@ Both MCP directions share one job manager and local state store. The host suppli
 1. Validate the request, resolve an absolute project directory, and identify the canonical Git worktree root (or the directory itself for non-Git projects).
 2. Save a new UUID job and acquire an exclusive workspace lock for edit mode.
 3. Mark startup in metadata, launch the worker, record its process identity, and send the task through stdin.
-4. Save stdout/stderr separately. Capture Codex's final-message file or parse Claude's JSON answer and session ID.
+4. Save stdout/stderr separately. Capture Codex's final-message file, or parse the session ID and final result from Claude's event stream.
 5. Stop remaining worker descendants, atomically save the final status/result, and release the edit lock after cleanup is confirmed.
 
 Project selection uses explicit `cwd`, then `CLAUDE_PROJECT_DIR`, then the
@@ -18,7 +18,7 @@ changes. All paths still pass through validation and canonicalization.
 
 `jobs/<uuid>/job.json` stores the provider, task, paths, mode, timestamps, owner, worker identity, status, and error. Result and log files live alongside it. The root defaults to `~/.local/state/dual-agent`, honors `XDG_STATE_HOME`, and can be overridden with `DUAL_AGENT_STATE_DIR`. Both host registrations use the same absolute root.
 
-The original call returns a job ID by default. Status calls can wait up to 30 seconds, avoiding dependence on unusually long MCP request timeouts. Jobs continue while their server is alive; completed results are accessible after restart. A large result is returned as an excerpt with the complete file path.
+The original call returns a job ID by default. Status calls can wait up to 30 seconds, avoiding dependence on unusually long MCP request timeouts. Running status reports elapsed time and the age of the newest log output. Both workers stream events, so a host can tell a slow job from a stalled one; Claude reports thinking progress every few seconds. Jobs continue while their server is alive; completed results are accessible after restart. A large result is returned as an excerpt with the complete file path.
 
 The Codex MCP server also emits Claude Code channel events from the job manager's
 completion callback, after finalizing job state. Events include the job ID, type,

@@ -29,6 +29,13 @@ to recover a task ID and `delegate_claude_cancel` when the work should stop.
 Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
 and discards its answer, and reviews can take from minutes to over an hour.
 
+Claude reviews often take 10 to 30 minutes. While a job runs, status shows the
+elapsed time, output bytes, and time since the last output. Claude streams
+progress every few seconds, even while thinking, so growing output means it is
+working. Do not cancel or resubmit a job because it is slow: cancelling discards
+its unfinished answer, and a retry starts over. Cancel only when the user asks,
+the result is no longer needed, or output has stopped for more than 10 minutes.
+
 Inspect the result, changes, errors, and verification. A completed worker is
 evidence to integrate, not a substitute for checking the user's objective.
 If status is `interrupted`, inspect existing changes before retrying. Never

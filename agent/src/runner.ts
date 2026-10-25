@@ -1,7 +1,8 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
+import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { isCodexProvider, Job, buildPrompt, ProcessIdentity, providerLabel } from "./tasks.js";
 import { JobStore, processIdentity } from "./jobStore.js";
@@ -34,7 +35,9 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
   }
   return {
     command: process.env.CLAUDE_BIN || "claude",
-    args: ["--print", "--output-format", "json", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+    // json prints nothing until the answer, so a working job looks stalled.
+    // stream-json emits events every few seconds, even while Claude thinks.
+    args: ["--print", "--output-format", "stream-json", "--verbose", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
       "--disable-slash-commands", "--no-chrome", "--permission-prompts", "none",
       "--permission-mode", job.mode === "edit" ? "auto" : "dontAsk",
       "--tools", job.mode === "edit" ? "Read,Glob,Grep,Edit,Write,Bash" : "Read,Glob,Grep",
@@ -83,21 +86,27 @@ export async function runProvider(job: Job, store: JobStore, options: {
   if (options.onDiagnostic) proc.stderr.on("data", chunk => options.onDiagnostic!(chunk.toString()));
 
   let sessionId: string | undefined;
+  let claudeResult: { result?: unknown; session_id?: unknown; is_error?: unknown; permission_denials?: unknown } | undefined;
   let pendingLine = "";
-  if (isCodexProvider(job.provider)) {
-    proc.stdout.on("data", chunk => {
-      pendingLine += chunk.toString();
-      const lines = pendingLine.split("\n");
-      pendingLine = lines.pop()!;
-      for (const line of lines) {
-        try {
-          const event = JSON.parse(line);
-          if (event.type === "thread.started" && typeof event.thread_id === "string") sessionId = event.thread_id;
-        } catch { /* Full raw output remains in stdout.log. */ }
-      }
-      if (pendingLine.length > 1024 * 1024) pendingLine = "";
-    });
-  }
+  const decoder = new StringDecoder("utf8");
+  const parseLine = (line: string) => {
+    try {
+      const event = JSON.parse(line);
+      if (isCodexProvider(job.provider)) {
+        if (event.type === "thread.started" && typeof event.thread_id === "string") sessionId = event.thread_id;
+      } else if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
+        sessionId = event.session_id;
+      } else if (event.type === "result") claudeResult = event;
+    } catch { /* Full raw output remains in stdout.log. */ }
+  };
+  proc.stdout.on("data", chunk => {
+    const lines = decoder.write(chunk).split("\n");
+    lines[0] = pendingLine + lines[0];
+    pendingLine = lines.pop()!;
+    lines.forEach(parseLine);
+    // Claude's final answer is one line; drop only pathological lines.
+    if (pendingLine.length > 32 * 1024 * 1024) pendingLine = "";
+  });
   const outputs = [
     pipeline(proc.stdout, createWriteStream(store.file(job.id, "stdout.log"), { mode: 0o600 })),
     pipeline(proc.stderr, createWriteStream(store.file(job.id, "stderr.log"), { mode: 0o600 })),
@@ -114,6 +123,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
   const { code } = await closed;
   const cleanupConfirmed = await stop();
   await Promise.all(outputs);
+  parseLine(pendingLine + decoder.end());
   options.signal.removeEventListener("abort", abort);
 
   let output = "";
@@ -125,10 +135,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
           throw error;
         });
       } else {
-        const path = store.file(job.id, "stdout.log");
-        if ((await stat(path)).size > 32 * 1024 * 1024) throw new Error("Claude JSON exceeds 32 MiB; see stdout.log.");
-        const parsed = JSON.parse(await readFile(path, "utf8"));
-        const result = Array.isArray(parsed) ? parsed.filter(item => item.type === "result").at(-1) : parsed;
+        const result = claudeResult;
         if (!result || typeof result.result !== "string") throw new Error("Claude returned no JSON result; see stdout.log.");
         output = result.result;
         if (typeof result.session_id === "string") sessionId = result.session_id;
