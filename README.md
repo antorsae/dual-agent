@@ -58,19 +58,32 @@ CLAUDE_CODE_EFFORT_LEVEL=max ./setup-dual-agent.sh --claude-mcp
 
 Rosalind setup requires the Codex profile file
 `$CODEX_HOME/rosalind_delegate.config.toml` (default:
-`~/.codex/rosalind_delegate.config.toml`). Setup validates the existing profile
-and does not create or overwrite it. To perform a real one-request verification,
-run `./setup-dual-agent.sh --rosalind-mcp --verify-rosalind-profile`; the check is
-skipped by default so installation does not make a model request unexpectedly.
+`~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile.
 
 Gemini setup requires `$CODEX_HOME/gemini.config.toml` (default:
 `~/.codex/gemini.config.toml`), the profile used by `codex -p gemini`.
 It uses the model and authentication configured there, including Gemini 4 Carbon.
-Setup checks that the profile exists and preserves it. Install Gemini for both hosts with:
+Setup preserves this profile too. Install Gemini for both hosts with:
 
 ```bash
 CODEX_BIN=codex ./setup-dual-agent.sh --gemini-mcp
 ```
+
+For each selected Rosalind or Gemini integration, setup sends one live request
+through its Codex profile by default. The command must succeed and return the
+expected response marker before setup builds or changes any registrations.
+Use `--skip-profile-checks` to skip both live checks, or
+`--skip-rosalind-profile-check` / `--skip-gemini-profile-check` to skip one:
+
+```bash
+./setup-dual-agent.sh --rosalind-mcp --gemini-mcp --skip-profile-checks
+```
+
+Skip flags also work with the interactive menu. Profile files are still required.
+`ROSALIND_VERIFY_PROFILE=0` and `GEMINI_VERIFY_PROFILE=0` also skip their respective
+checks. Explicit `--verify-rosalind-profile` / `--verify-gemini-profile` select the
+integration and enable its check; command-line flags override the environment,
+and the last check option for a profile wins.
 
 ## MCP tools
 

@@ -74,15 +74,20 @@ the Codex worker, and `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_EFFORT_LEVEL` for the
 Claude worker when configured; a saved effort is kept when setup reruns without it.
 
 Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
-`~/.codex/rosalind_delegate.config.toml`). Setup validates the existing profile
-and never creates or overwrites it. Pass `--verify-rosalind-profile` to run one
-live Codex request through the profile during setup.
+`~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile
+and sends one live request through it by default.
 
 Gemini requires `$CODEX_HOME/gemini.config.toml` (default:
 `~/.codex/gemini.config.toml`). `./setup-dual-agent.sh --gemini-mcp` checks for
 this existing profile and installs both registrations and skills. The worker
 selects `-p gemini`; its model and authentication come from that profile.
-Installation preserves the profile and does not make a model request.
+Installation preserves the profile and sends one live request through it by default.
+
+Both profile checks require a successful command and the expected response marker
+before building or replacing any registrations. Use `--skip-profile-checks` to
+skip both live checks, or `--skip-rosalind-profile-check` /
+`--skip-gemini-profile-check` to skip just one. The profile files remain required.
+These flags can accompany installation options or the interactive menu.
 
 ## Tool contract
 

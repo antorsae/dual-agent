@@ -14,7 +14,7 @@ async function fixture(t, missingBinaries = []) {
   const bin = join(dir, "bin");
   const log = join(dir, "calls.jsonl");
   await Promise.all([
-    mkdir(bin), mkdir(testHome), mkdir(join(testHome, ".codex"), { recursive: true }), mkdir(join(dir, "agent", "dist"), { recursive: true }),
+    mkdir(bin), mkdir(join(testHome, ".codex"), { recursive: true }), mkdir(join(dir, "agent", "dist"), { recursive: true }),
   ]);
   await writeFile(join(testHome, ".codex/rosalind_delegate.config.toml"), 'model = "fixture-rosalind"\n');
   await writeFile(join(testHome, ".codex/gemini.config.toml"), 'model = "fixture-gemini"\n');
@@ -47,11 +47,14 @@ async function fixture(t, missingBinaries = []) {
     'const fs = require("node:fs");',
     'const name = require("node:path").basename(process.argv[1]);',
     "const args = process.argv.slice(2);",
-    'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args }) + "\\n");',
+    'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args, codexHome: process.env.CODEX_HOME }) + "\\n");',
     'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
-    'if (["codex", "codex-pool"].includes(name) && args.includes("exec")) { process.stdin.resume(); process.stdin.on("end", () => fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], process.env.DUAL_AGENT_TEST_PROFILE_ANSWER || "ROSALIND_PROFILE_OK")); }',
-    'if (name.startsWith("custom codex")) { process.stdin.resume(); process.stdin.on("end", () => { if (args.includes("--output-last-message")) fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], "custom executable"); }); }',
+    'if (args.includes("exec")) { process.stdin.resume(); process.stdin.on("end", () => {',
+    '  if (process.env.DUAL_AGENT_TEST_NO_PROFILE_ANSWER === "1") return;',
+    '  const answer = process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? (args.includes("-p") ? "DUAL_AGENT_PROFILE_OK" : "custom executable");',
+    '  fs.writeFileSync(args[args.indexOf("--output-last-message") + 1], answer);',
+    '}); }',
     // Mirror the table layout that codex mcp add/remove write to config.toml.
     'if (name === "codex" && args[0] === "mcp" && ["add", "remove"].includes(args[1]) && process.env.DUAL_AGENT_TEST_NO_CONFIG !== "1") {',
     '  const path = require("node:path");',
@@ -71,7 +74,7 @@ async function fixture(t, missingBinaries = []) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
-  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE"]) delete env[key];
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "GEMINI_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_TEST_NO_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE"]) delete env[key];
   async function runScript(script, args, input, overrides, expectedStatus) {
     const result = spawnSync("bash", [join(dir, script), ...args], {
       cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
@@ -366,7 +369,11 @@ test("Gemini setup installs both hosts, forwards profile keys, and preserves the
   assert.equal(await readFile(join(f.testHome, ".claude/skills/gemini-delegate/SKILL.md"), "utf8"), "gemini-delegate fixture");
   assert.equal(await readFile(join(configDir, "skills/gemini-delegate/SKILL.md"), "utf8"), "gemini-delegate fixture");
   assert.equal(await readFile(profile, "utf8"), content);
-  assert.ok(!calls.some(call => call.args.includes("exec")), "installation must not make a model request");
+  const verification = calls.filter(call => call.args.includes("exec"));
+  assert.equal(verification.length, 1);
+  assert.equal(verification[0].name, "custom codex $'quoted");
+  assert.equal(verification[0].codexHome, configDir);
+  assert.equal(verification[0].args[verification[0].args.indexOf("-p") + 1], "gemini");
 
   const installed = calls.length;
   const { calls: removed } = await f.uninstall({ CODEX_HOME: configDir });
@@ -520,24 +527,105 @@ for (const withTee of [true, false]) {
   });
 }
 
-test("Rosalind verification is optional and works with combined options", async (t) => {
+for (const [provider, label, profile, menuChoice] of [
+  ["rosalind", "Rosalind", "rosalind_delegate", "3"], ["gemini", "Gemini", "gemini", "5"],
+]) {
+  test(`${label} verifies its profile by default for explicit and interactive setup`, async (t) => {
+    const f = await fixture(t);
+    let previousCalls = 0;
+    for (const [args, input] of [[[`--${provider}-mcp`], ""], [[], `${menuChoice}c`]]) {
+      const { calls, output } = await f.run(args, input);
+      const recent = calls.slice(previousCalls);
+      previousCalls = calls.length;
+      const checks = recent.filter(call => call.args.includes("exec"));
+      assert.equal(checks.length, 1);
+      assert.equal(checks[0].args[checks[0].args.indexOf("-p") + 1], profile);
+      assert.equal(checks[0].codexHome, join(f.testHome, ".codex"));
+      assert.equal(checks[0].args[checks[0].args.indexOf("--sandbox") + 1], "read-only");
+      assert.ok(checks[0].args.includes("--ephemeral"));
+      assert.ok(checks[0].args.includes('approval_policy="never"'));
+      assert.equal(recent[0], checks[0], "verify before building or registering");
+      assert.ok(output.includes(`Live ${label} profile check (one request)`));
+    }
+  });
+
+  test(`${label} verification honors its environment setting and explicit override`, async (t) => {
+    const f = await fixture(t);
+    const overrides = { [`${provider.toUpperCase()}_VERIFY_PROFILE`]: "0" };
+    const skipped = await f.run([`--${provider}-mcp`], "", overrides);
+    assert.ok(!skipped.calls.some(call => call.args.includes("exec")));
+    const { calls } = await f.run(["--skip-profile-checks", `--verify-${provider}-profile`], "", overrides);
+    const checks = calls.slice(skipped.calls.length).filter(call => call.args.includes("exec"));
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].args[checks[0].args.indexOf("-p") + 1], profile);
+  });
+
+  test(`${label} skip flag still requires its profile file`, async (t) => {
+    const f = await fixture(t);
+    await rm(join(f.testHome, `.codex/${profile}.config.toml`));
+    const { calls, output } = await f.run([`--${provider}-mcp`, `--skip-${provider}-profile-check`], "", {}, 1);
+    assert.ok(output.includes(`${label} Codex profile not found`));
+    assert.deepEqual(calls, []);
+  });
+
+  for (const [failure, overrides] of [
+    ["process failure", { DUAL_AGENT_TEST_FAIL_COMMAND: "codex-pool" }],
+    ["missing answer", { DUAL_AGENT_TEST_NO_PROFILE_ANSWER: "1" }],
+    ["empty answer", { DUAL_AGENT_TEST_PROFILE_ANSWER: "" }],
+    ["unexpected answer", { DUAL_AGENT_TEST_PROFILE_ANSWER: "unexpected response" }],
+    ["extra answer text", { DUAL_AGENT_TEST_PROFILE_ANSWER: "DUAL_AGENT_PROFILE_OK but something failed" }],
+  ]) {
+    test(`${label} ${failure} stops setup without changing registrations`, async (t) => {
+      const f = await fixture(t);
+      const config = join(f.testHome, ".codex/config.toml");
+      const original = '[mcp_servers.codex-delegate]\ncommand = "existing"\n';
+      await writeFile(config, original);
+      const installLog = join(f.dir, "install.log");
+      const answerFile = `${installLog}.${provider}-answer`;
+      await writeFile(answerFile, "DUAL_AGENT_PROFILE_OK");
+      const { calls, output } = await f.run(["--codex-mcp", `--${provider}-mcp`], "", { ...overrides, DUAL_AGENT_INSTALL_LOG: installLog }, 1);
+      assert.ok(output.includes(`The live ${label} profile check failed`));
+      assert.ok(output.includes(`--skip-${provider}-profile-check`));
+      assert.equal(calls.length, 1);
+      assert.ok(calls[0].args.includes("exec"));
+      await assert.rejects(access(answerFile), { code: "ENOENT" });
+      assert.equal(await readFile(config, "utf8"), original);
+      assert.equal(await readFile(join(f.testHome, ".claude.json"), "utf8"), '{"unrelated":true}');
+    });
+  }
+}
+
+for (const [skip, expectedProfiles] of [
+  ["--skip-profile-checks", []],
+  ["--skip-rosalind-profile-check", ["gemini"]],
+  ["--skip-gemini-profile-check", ["rosalind_delegate"]],
+]) {
+  test(`${skip} skips only the requested checks in explicit and interactive setup`, async (t) => {
+    const f = await fixture(t);
+    let previousCalls = 0;
+    for (const [args, input] of [[[skip, "--rosalind-mcp", "--gemini-mcp"], ""], [[skip], "35c"]]) {
+      const { calls } = await f.run(args, input);
+      const recent = calls.slice(previousCalls);
+      previousCalls = calls.length;
+      assert.deepEqual(recent.filter(call => call.args.includes("exec")).map(call => call.args[call.args.indexOf("-p") + 1]), expectedProfiles);
+      assert.equal(recent.filter(call => call.args[1] === "add").length, 4);
+    }
+  });
+}
+
+test("--all verifies both profiles once before changing registrations", async (t) => {
   const f = await fixture(t);
-  const initial = await f.run(["--rosalind-mcp"]);
-  assert.ok(!initial.calls.some(call => call.args.includes("exec")));
-  const { calls } = await f.run(["--gemini-mcp", "--verify-rosalind-profile"]);
-  const recent = calls.slice(initial.calls.length);
-  const verification = recent.filter(call => call.args.includes("exec"));
-  assert.equal(verification.length, 1);
-  assert.equal(verification[0].args[verification[0].args.indexOf("-p") + 1], "rosalind_delegate");
-  assert.equal(recent.filter(call => call.args[1] === "add").length, 4);
+  const { calls } = await f.run(["--all", "--gemini-mcp", "--verify-rosalind-profile"]);
+  const checks = calls.filter(call => call.args.includes("exec"));
+  assert.deepEqual(checks.map(call => call.args[call.args.indexOf("-p") + 1]), ["rosalind_delegate", "gemini"]);
+  assert.deepEqual(calls.slice(0, 2), checks);
+  assert.equal(calls.filter(call => call.args[1] === "add").length, 7);
 });
 
-test("a failed Rosalind verification stops before building or registering", async (t) => {
+test("ordinary Codex and Claude installation makes no profile requests", async (t) => {
   const f = await fixture(t);
-  const { calls, output } = await f.run(["--verify-rosalind-profile"], "", { DUAL_AGENT_TEST_PROFILE_ANSWER: "unexpected response" }, 1);
-  assert.match(output, /live Rosalind profile check failed/);
-  assert.equal(calls.length, 1);
-  assert.ok(calls[0].args.includes("exec"));
+  const { calls } = await f.run(["--both", "--codex-from-codex"]);
+  assert.ok(!calls.some(call => call.args.includes("exec")));
 });
 
 test("uninstall fallback removes all catalog integrations and preserves unrelated settings and jobs", async (t) => {

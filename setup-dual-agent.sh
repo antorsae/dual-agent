@@ -12,7 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/integrations.sh"
 VERBOSE="${DUAL_AGENT_VERBOSE:-0}"
 INSTALL_LOG="${DUAL_AGENT_INSTALL_LOG:-${TMPDIR:-/tmp}/dual-agent-setup-$$.log}"
-VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-0}"
+VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-1}"
+VERIFY_GEMINI_PROFILE="${GEMINI_VERIFY_PROFILE:-1}"
+INSTALL_REQUESTED=0
 SELECTED=()
 for index in "${!INTEGRATIONS[@]}"; do SELECTED+=(0); done
 
@@ -80,6 +82,7 @@ show_log_tail() {
 
 select_all() {
     local index
+    INSTALL_REQUESTED=1
     for index in "${!INTEGRATIONS[@]}"; do SELECTED[$index]="$1"; done
 }
 
@@ -88,6 +91,7 @@ select_option() {
     for index in "${!INTEGRATIONS[@]}"; do
         load_integration "$index"
         if [ "$1" = "$INTEGRATION_OPTION" ]; then
+            INSTALL_REQUESTED=1
             SELECTED[$index]=1
             return 0
         fi
@@ -105,9 +109,14 @@ show_help() {
     done
     echo "  --both                 Install the two original delegation directions"
     echo "  --all                  Install all delegation integrations"
-    echo "  --verify-rosalind-profile Run one live Rosalind profile check"
+    echo "  --skip-profile-checks  Skip live Rosalind and Gemini checks"
+    echo "  --skip-rosalind-profile-check Skip only the live Rosalind check"
+    echo "  --skip-gemini-profile-check Skip only the live Gemini check"
+    echo "  --verify-rosalind-profile Select Rosalind and enable its live check"
+    echo "  --verify-gemini-profile Select Gemini and enable its live check"
     echo "  --mcp, --rosalind, --gemini Alias their corresponding --*-mcp options"
     echo "Options may be combined. Each integration is installed once."
+    echo "Selected Rosalind and Gemini integrations each send one live request by default."
 }
 
 for setup_arg in "$@"; do
@@ -117,14 +126,19 @@ for setup_arg in "$@"; do
         --mcp) select_option --codex-mcp ;;
         --rosalind) select_option --rosalind-mcp ;;
         --gemini) select_option --gemini-mcp ;;
+        --skip-profile-checks) VERIFY_ROSALIND_PROFILE=0; VERIFY_GEMINI_PROFILE=0 ;;
+        --skip-rosalind-profile-check) VERIFY_ROSALIND_PROFILE=0 ;;
+        --skip-gemini-profile-check) VERIFY_GEMINI_PROFILE=0 ;;
         --verify-rosalind-profile) select_option --rosalind-mcp; VERIFY_ROSALIND_PROFILE=1 ;;
+        --verify-gemini-profile) select_option --gemini-mcp; VERIFY_GEMINI_PROFILE=1 ;;
         --help|-h) show_help; exit 0 ;;
         *) select_option "$setup_arg" ;;
     esac
 done
 
 echo -e "${BLUE}Dual Agent Environment Setup${NC}"
-if [ "$#" -eq 0 ]; then
+if [ "$INSTALL_REQUESTED" -eq 0 ]; then
+    echo "Selected Rosalind and Gemini integrations each send one live request unless skipped."
     while true; do
         echo "Select integrations (toggle a number, then continue):"
         for index in "${!INTEGRATIONS[@]}"; do
@@ -160,7 +174,6 @@ NEED_CLAUDE_HOST=0
 NEED_CODEX_HOST=0
 NEED_CLAUDE_WORKER=0
 NEED_CODEX_WORKER=0
-ROSALIND_SELECTED=0
 for index in "${!INTEGRATIONS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
     SELECTION_COUNT=$((SELECTION_COUNT + 1))
@@ -169,17 +182,10 @@ for index in "${!INTEGRATIONS[@]}"; do
         case "$host" in claude) NEED_CLAUDE_HOST=1 ;; codex) NEED_CODEX_HOST=1 ;; esac
     done
     if [ "$INTEGRATION_PROVIDER" = "claude" ]; then NEED_CLAUDE_WORKER=1; else NEED_CODEX_WORKER=1; fi
-    if [ "$INTEGRATION_PROVIDER" = "rosalind" ]; then ROSALIND_SELECTED=1; fi
 done
 if [ "$SELECTION_COUNT" -eq 0 ]; then
     echo "Nothing selected. Exiting."
     exit 0
-fi
-
-if [ "$#" -eq 0 ] && [ "$ROSALIND_SELECTED" -eq 1 ] && [ "$VERIFY_ROSALIND_PROFILE" != "1" ] && [ -t 0 ]; then
-    printf "Run one live Rosalind profile check? This sends one Codex request. [y/N]: "
-    read -r verify_choice || verify_choice="n"
-    case "$verify_choice" in y|Y|yes|YES) VERIFY_ROSALIND_PROFILE=1 ;; esac
 fi
 
 : > "$INSTALL_LOG" 2>/dev/null || fail "Cannot write installer log: $INSTALL_LOG"
@@ -223,22 +229,39 @@ for index in "${!INTEGRATIONS[@]}"; do
     echo "  $INTEGRATION_LABEL Codex profile: using existing $profile_file"
 done
 
-verify_rosalind_profile() {
-    local answer_file="${INSTALL_LOG}.rosalind-answer" answer
+verify_codex_profile() {
+    local provider="$1" profile="$2" answer
+    local answer_file="${INSTALL_LOG}.$provider-answer" expected="DUAL_AGENT_PROFILE_OK"
     rm -f "$answer_file"
-    if ! printf '%s\n' "Reply with exactly: ROSALIND_PROFILE_OK" | CODEX_HOME="$DELEGATE_CODEX_HOME" "$DELEGATE_CODEX_BIN" -p rosalind_delegate exec \
-        --ephemeral --sandbox read-only --skip-git-repo-check --json --output-last-message "$answer_file" -; then
+    if ! printf '%s\n' "Profile connectivity check. Do not use tools or read files. Reply with exactly: $expected" | CODEX_HOME="$DELEGATE_CODEX_HOME" "$DELEGATE_CODEX_BIN" -p "$profile" exec \
+        --ephemeral --sandbox read-only -c 'approval_policy="never"' --skip-git-repo-check --json --output-last-message "$answer_file" -; then
         rm -f "$answer_file"
         return 1
     fi
-    [ -s "$answer_file" ] || { rm -f "$answer_file"; return 1; }
+    [ -s "$answer_file" ] || { echo "Profile $profile returned no answer." >&2; rm -f "$answer_file"; return 1; }
     answer="$(<"$answer_file")"
     rm -f "$answer_file"
-    [[ "$answer" == *"ROSALIND_PROFILE_OK"* ]]
+    if [ "$answer" != "$expected" ]; then
+        echo "Profile $profile did not return the expected response marker." >&2
+        return 1
+    fi
 }
-if [ "$ROSALIND_SELECTED" -eq 1 ] && [ "$VERIFY_ROSALIND_PROFILE" = "1" ]; then
-    run_step "Live Rosalind profile check" verify_rosalind_profile || fail "The live Rosalind profile check failed."
-fi
+for index in "${!INTEGRATIONS[@]}"; do
+    [ "${SELECTED[$index]}" -eq 1 ] || continue
+    load_integration "$index"
+    [ -n "$INTEGRATION_PROFILE" ] || continue
+    verify_profile=1
+    case "$INTEGRATION_PROVIDER" in
+        rosalind) verify_profile="$VERIFY_ROSALIND_PROFILE" ;;
+        gemini) verify_profile="$VERIFY_GEMINI_PROFILE" ;;
+    esac
+    case "$verify_profile" in
+        0) echo "  Live $INTEGRATION_LABEL profile check: skipped" ;;
+        1) run_step "Live $INTEGRATION_LABEL profile check (one request)" verify_codex_profile "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE" ||
+            fail "The live $INTEGRATION_LABEL profile check failed. Fix the profile or use --skip-$INTEGRATION_PROVIDER-profile-check to skip verification." ;;
+        *) fail "$INTEGRATION_LABEL profile verification must be 0 or 1." ;;
+    esac
+done
 
 install_skill() {
     local source="$1" destination="$2"
