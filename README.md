@@ -132,6 +132,13 @@ with the job.
 
 Review, plan-review, and custom tasks default to **read-only**. Implementation defaults to **edit**. A custom editing task must explicitly select `mode: "edit"`.
 
+Codex, Rosalind, and Gemini can run tests in read-only mode. The workspace stays
+read-only, while each job gets its own writable scratch directory outside the
+workspace. Temporary files, common caches, Python bytecode, pytest cache, and
+coverage output are redirected there. Tests with other output paths need those
+paths redirected, or the necessary files copied into scratch. Keep reviews in
+`mode: "read-only"` when asking them to run tests.
+
 ```json
 {
   "prompt": "Review authentication error handling and report concrete defects",
@@ -191,7 +198,18 @@ directories outside Git repositories. They do not require a second Git-directory
 check. This shares the host's directory choice; each CLI still applies its own
 tool permissions and project-configuration trust rules.
 
-Codex reviews run in its read-only sandbox with approval escalation disabled. Claude reviews receive only `Read`, `Glob`, and `Grep` tools, which may read files anywhere, as Codex's read-only sandbox can. Claude edits use automatic permission review; unavailable permissions or denied tool calls produce a failed job with the available result for inspection. Claude's read-only mode is a tool restriction, not an additional operating-system sandbox around its startup hooks or extensions.
+Codex-backed reviews use a filesystem permission profile that permits writes only
+to their scratch directory, with network access and approval escalation disabled.
+This requires a Codex CLI supporting named permission profiles and `--strict-config`;
+unsupported configurations fail startup. Claude reviews receive only `Read`,
+`Glob`, and `Grep` tools, which may read files anywhere. Claude edits use automatic
+permission review; unavailable permissions or denied tool calls produce a failed
+job with the available result for inspection. Claude's read-only mode is a tool
+restriction, not an additional operating-system sandbox around its startup hooks or extensions.
+
+Scratch files are retained with job results under `jobs/<uuid>/scratch` and exposed
+as `paths.scratch` in the tool response. Keep `DUAL_AGENT_STATE_DIR` outside the
+workspace; read-only Codex jobs reject a state directory inside it.
 
 Workers are told to complete their assigned task themselves. Claude workers load no configured MCP servers; Codex workers disable all delegation servers to avoid recursive handoffs. Project guidance continues to use the native `AGENTS.md` and `CLAUDE.md` conventions.
 

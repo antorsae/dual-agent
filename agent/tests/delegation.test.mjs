@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,7 +86,9 @@ for (const [provider, profile] of [["rosalind", "rosalind_delegate"], ["gemini",
     const request = (await f.requests()).at(-1);
     assert.equal(request.args[request.args.indexOf("-p") + 1], profile);
     assert.ok(request.args.includes("--skip-git-repo-check"));
-    assert.equal(request.args[request.args.indexOf("--sandbox") + 1], "read-only");
+    assert.ok(request.args.includes("--strict-config"));
+    assert.ok(request.args.some(arg => arg.startsWith("default_permissions=")));
+    assert.ok(result.structuredContent.paths.scratch);
     for (const server of ["claude", "codex", "rosalind", "gemini"]) {
       assert.ok(request.args.some(arg => arg.includes(`${server}-delegate`) && arg.includes("enabled=false")));
     }
@@ -199,7 +201,8 @@ for (const provider of ["codex", "claude"]) {
       assert.equal(request.cwd, f.project);
       assert.ok(!request.args.some(arg => arg.includes("Third independent")));
       if (provider === "codex") {
-        assert.ok(request.args.includes("read-only"));
+        assert.ok(request.args.includes("--strict-config"));
+        assert.equal(request.env.DUAL_AGENT_SCRATCH_DIR, job.paths.scratch);
         assert.ok(!request.args.includes("--approve-for-me"));
         assert.ok(request.args.some(arg => arg.includes("claude-delegate") && arg.includes("enabled=false")));
       } else {
@@ -239,9 +242,11 @@ test("validates explicit paths and prefers cwd over CLAUDE_PROJECT_DIR over the 
   const implicit = await f.connect("codex", { CLAUDE_PROJECT_DIR: alias });
   const result = await implicit.call("", { prompt: "test", wait: true });
   assert.equal(result.structuredContent.cwd, f.project);
-  const explicit = await implicit.call("", { prompt: "override the environment", cwd: f.root, wait: true });
-  assert.equal(explicit.structuredContent.cwd, f.root);
-  assert.equal((await f.requests()).at(-1).cwd, f.root);
+  const otherProject = join(f.root, "other-project");
+  await mkdir(otherProject);
+  const explicit = await implicit.call("", { prompt: "override the environment", cwd: otherProject, wait: true });
+  assert.equal(explicit.structuredContent.cwd, otherProject);
+  assert.equal((await f.requests()).at(-1).cwd, otherProject);
 });
 
 test("Codex accepts the host-selected non-Git project in both execution modes", async t => {
@@ -256,12 +261,73 @@ test("Codex accepts the host-selected non-Git project in both execution modes", 
     assert.ok(request.args.includes("--skip-git-repo-check"));
     assert.ok(!request.args.includes("--dangerously-bypass-approvals-and-sandbox"));
     if (mode === "read-only") {
-      assert.equal(request.args[request.args.indexOf("--sandbox") + 1], "read-only");
+      assert.ok(request.args.some(arg => arg.startsWith("default_permissions=")));
       assert.ok(request.args.includes('approval_policy="never"'));
     } else {
       assert.ok(request.args.includes("--approve-for-me"));
     }
   }
+});
+
+test("read-only Codex jobs have distinct retained scratch directories and redirected test caches", async t => {
+  const f = await fixture(t);
+  const state = join(f.root, "state with 'quotes'");
+  const c = await f.connect("codex", { DUAL_AGENT_STATE_DIR: state, PYTEST_ADDOPTS: "-q" });
+  const scratchPaths = [];
+  for (const prompt of ["first review", "second review"]) {
+    const result = await c.call("_review", { prompt, cwd: f.project, wait: true });
+    assert.equal(result.structuredContent.status, "completed", text(result));
+    const scratch = result.structuredContent.paths.scratch;
+    scratchPaths.push(scratch);
+    if (process.platform !== "win32") assert.equal((await stat(scratch)).mode & 0o777, 0o700);
+    const request = (await f.requests()).at(-1);
+    assert.equal(request.env.TMPDIR, join(scratch, "tmp"));
+    assert.equal(request.env.TEMP, request.env.TMPDIR);
+    assert.equal(request.env.XDG_CACHE_HOME, join(scratch, "cache"));
+    assert.equal(request.env.PYTHONPYCACHEPREFIX, join(scratch, "pycache"));
+    assert.equal(request.env.COVERAGE_FILE, join(scratch, ".coverage"));
+    assert.match(request.env.PYTEST_ADDOPTS, /^-q -o /);
+    assert.ok(request.input.includes(JSON.stringify(scratch)));
+    assert.match(request.input, /may run tests/);
+    assert.match(text(result), /project files remain read-only/);
+    assert.ok(!request.args.includes("--approve-for-me"));
+    assert.ok(!request.args.includes("--sandbox"), "legacy sandbox selection would override the scratch profile");
+    assert.ok(request.args.some(arg => arg.includes(JSON.stringify(scratch)) && arg.includes('":root"="read"')));
+    await writeFile(join(scratch, "test-artifact.txt"), prompt);
+    const recovered = await c.call("_status", { task_id: result.structuredContent.task_id });
+    assert.equal(recovered.structuredContent.paths.scratch, scratch);
+  }
+  assert.notEqual(scratchPaths[0], scratchPaths[1]);
+  await c.client.close();
+  assert.equal(await readFile(join(scratchPaths[0], "test-artifact.txt"), "utf8"), "first review");
+});
+
+test("read-only Codex rejects state directories inside the workspace, including symlink aliases", async t => {
+  const f = await fixture(t);
+  const state = join(f.project, "state");
+  await mkdir(state);
+  const alias = join(f.root, "state-alias");
+  await symlink(state, alias, "dir");
+  for (const root of [state, alias]) {
+    const c = await f.connect("codex", { DUAL_AGENT_STATE_DIR: root });
+    const result = await c.call("_review", { prompt: "review", cwd: f.project });
+    assert.equal(result.isError, true, text(result));
+    assert.match(text(result), /DUAL_AGENT_STATE_DIR outside the workspace/);
+  }
+  assert.equal((await f.requests()).length, 0);
+});
+
+test("edit jobs and Claude reviews do not receive scratch write permissions", async t => {
+  const f = await fixture(t);
+  const codex = await f.connect("codex");
+  const edited = await codex.call("_implement", { prompt: "edit", cwd: f.project, wait: true });
+  assert.equal(edited.structuredContent.paths.scratch, undefined);
+  assert.ok((await f.requests()).at(-1).args.includes("--approve-for-me"));
+  const claude = await f.connect("claude");
+  const reviewed = await claude.call("_review", { prompt: "review", cwd: f.project, wait: true });
+  assert.equal(reviewed.structuredContent.paths.scratch, undefined);
+  const request = (await f.requests()).at(-1);
+  assert.equal(request.args[request.args.indexOf("--tools") + 1], "Read,Glob,Grep");
 });
 
 test("results and task lists persist across MCP restarts", async t => {

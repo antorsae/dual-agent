@@ -17,6 +17,12 @@ defaults to `edit`. Explicitly choose `mode: "edit"` for a custom editing task.
 Do not edit the same workspace while a delegated implementation owns its lock.
 Skip delegation for trivial changes or when the user asks to work without it.
 
+Read-only jobs can run tests and experiments in an isolated writable scratch
+directory while project files remain read-only. Temporary files and common test
+caches are redirected there. Keep `mode: "read-only"` for reviews that execute
+tests; redirect other outputs or copy inputs into scratch when needed. The tool
+response exposes `paths.scratch`, retained with the job results.
+
 If this session explicitly enabled the `codex-delegate` channel, do independent
 work while waiting for its completion event. On a
 `<channel source="codex-delegate" task_id="...">` event, call

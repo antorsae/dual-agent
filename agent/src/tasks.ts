@@ -29,6 +29,7 @@ export interface Job {
   files?: string[];
   cwd: string;
   workspace: string;
+  scratch?: string;
   mode: ExecutionMode;
   timeoutMs: number;
   status: JobStatus;
@@ -52,7 +53,7 @@ export function providerLabel(provider: Provider): string {
   return { codex: "Codex", claude: "Claude", rosalind: "Rosalind", gemini: "Gemini" }[provider];
 }
 
-export function buildPrompt(task: Pick<Job, "type" | "prompt" | "files" | "mode">): string {
+export function buildPrompt(task: Pick<Job, "type" | "prompt" | "files" | "mode" | "scratch">): string {
   const instructions: Record<TaskType, string> = {
     review: "Review the code for concrete defects and the user's specific concerns. Prioritize findings and cite file/line references.",
     implement: "Implement the request following existing project patterns. Run relevant checks and report changes, verification, and unresolved issues.",
@@ -63,5 +64,9 @@ export function buildPrompt(task: Pick<Job, "type" | "prompt" | "files" | "mode"
   return `# Task: ${task.type.toUpperCase()}\n\n${instructions[task.type]}\n\n` +
     `Complete this task yourself. Do not delegate to another agent or start another Claude/Codex session.\n` +
     (task.mode === "read-only" ? "This is a read-only task: do not modify project files.\n" : "Edit only what this task requires.\n") +
+    (task.scratch ? `You may run tests and experiments in the writable scratch directory: ${JSON.stringify(task.scratch)}.\n` +
+      "The workspace and other paths remain read-only. Temporary files, caches, Python bytecode, pytest cache, and coverage data are redirected to scratch. " +
+      "For tools that write beside source files, redirect their output or copy the necessary files into scratch. " +
+      "Do not patch the original workspace or switch to edit mode just to run tests. Report the commands run and any remaining test limitations.\n" : "") +
     `\n## Request\n\n${task.prompt}${files}`;
 }

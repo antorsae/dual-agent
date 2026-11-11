@@ -11,7 +11,8 @@ if (provider === "codex" && process.env.FAKE_CHECK_GIT_REPO === "1" &&
   process.stderr.write("Not inside a trusted directory and --skip-git-repo-check was not specified.\n");
   process.exit(1);
 }
-const capture = { args, input, cwd: process.cwd(), provider, pid: process.pid };
+const capture = { args, input, cwd: process.cwd(), provider, pid: process.pid,
+  env: Object.fromEntries(["DUAL_AGENT_SCRATCH_DIR", "TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "PYTHONPYCACHEPREFIX", "PYTEST_ADDOPTS", "COVERAGE_FILE", "npm_config_cache"].map(key => [key, process.env[key]])) };
 if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(capture) + "\n");
 if (process.env.DUAL_AGENT_CAPTURE) writeFileSync(process.env.DUAL_AGENT_CAPTURE, JSON.stringify(capture));
 process.stderr.write("fixture diagnostic\n");

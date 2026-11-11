@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 import { isCodexProvider, Job, buildPrompt, ProcessIdentity, providerLabel } from "./tasks.js";
 import { JobStore, processIdentity } from "./jobStore.js";
+import { readOnlyCodexArgs, scratchEnvironment } from "./scratch.js";
 
 const execFileAsync = promisify(execFile);
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,7 +24,7 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
     return {
       command: process.env.CODEX_BIN || "codex-pool",
       args: ["exec", ...(profile ? ["-p", profile] : []),
-        ...(job.mode === "edit" ? ["--approve-for-me"] : ["--sandbox", "read-only", "-c", 'approval_policy="never"']),
+        ...(job.mode === "edit" ? ["--approve-for-me"] : readOnlyCodexArgs(job)),
         // The host selected this project; allow non-Git directories without
         // changing the job's sandbox or approval policy.
         "--skip-git-repo-check",
@@ -70,7 +71,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
   const { command, args } = commandFor(job, store);
   const proc = spawn(command, args, {
     cwd: job.cwd, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, FORCE_COLOR: "0" },
+    env: { ...process.env, FORCE_COLOR: "0", ...(job.scratch ? scratchEnvironment(job.scratch) : {}) },
   });
   let problem: Error | undefined;
   let cleanup: Promise<boolean> | undefined;

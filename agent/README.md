@@ -103,7 +103,7 @@ The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `dele
 | `_list` | optional `limit` from 1 to 100 (default 20) |
 | `_cancel` | `task_id` |
 
-Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. Unknown arguments and invalid values are errors before execution.
+Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. For Codex, Rosalind, and Gemini, read-only preserves the workspace while allowing tests and experiments in per-job scratch. Unknown arguments and invalid values are errors before execution.
 
 The project directory is resolved from explicit `cwd`, then `CLAUDE_PROJECT_DIR`,
 then the MCP server's inherited working directory. Stdio hosts normally launch
@@ -159,7 +159,7 @@ collected through a waiting call does not need to be presented again.
 
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
-- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`; Gemini adds `-p gemini`. Plain Codex jobs pass no profile, so they use the default configuration of the registered `CODEX_HOME`, not the calling session's profile. All delegation MCP servers are disabled in the child invocation.
+- Codex: `exec --skip-git-repo-check --json --output-last-message ...`. Read-only jobs use a unique named filesystem permission profile: read access to the filesystem, write access only to job scratch, network disabled, and `approval_policy=never`. `--strict-config` prevents unsupported profile configuration from being silently ignored. Editing uses `--approve-for-me`. Rosalind adds `-p rosalind_delegate`; Gemini adds `-p gemini`. Plain Codex jobs pass no model profile, so they use the default model configuration of the registered `CODEX_HOME`. All delegation MCP servers are disabled in the child invocation.
 - Claude: `--print --output-format stream-json --verbose`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate
@@ -168,6 +168,16 @@ This does not change the job's read-only/edit policy, copy Claude's tool-permiss
 rules, or write entries to Codex's project trust configuration.
 
 Stdout and stderr are logged separately from the final answer. Codex uses its final-message file. Claude's event stream supplies the session ID at startup, which cancelled jobs keep, and the answer in its final `result` event; the stream shows progress every few seconds, even while Claude thinks. Failed jobs retain any available final result and diagnostics.
+
+Read-only Codex jobs keep the original project as `cwd` and create
+`jobs/<uuid>/scratch` outside the canonical workspace. The worker receives
+`DUAL_AGENT_SCRATCH_DIR`, `TMPDIR`/`TMP`/`TEMP`, `XDG_CACHE_HOME`,
+`PYTHONPYCACHEPREFIX`, `COVERAGE_FILE`, and `npm_config_cache` pointing into scratch.
+`PYTEST_ADDOPTS` preserves existing arguments and appends the scratch cache location.
+The prompt tells the worker to redirect other generated files or copy the required
+inputs into scratch. Read-only reviews can run tests without selecting edit mode.
+Scratch files are retained with the job and returned as `paths.scratch` for inspection.
+Claude's read-only jobs keep their existing file-tool restriction.
 
 ## State and locks
 
@@ -198,3 +208,13 @@ npm test
 ```
 
 The suite covers all delegation servers, persistence, cancellation/process cleanup, locking, validation, CLI behavior, and installer/uninstaller behavior. Agent tests use fake executables. Installer tests require Bash and jq; workspace tests require Git.
+
+To test the real filesystem sandbox without a model request, use an installed
+Codex with named permission-profile support and a Python environment with pytest:
+
+```bash
+DUAL_AGENT_SANDBOX_BIN=codex DUAL_AGENT_TEST_PYTHON=/path/to/python node --test tests/sandbox.test.mjs
+```
+
+This opt-in check runs pytest and SQLite, verifies cache redirection, and checks
+that writes to source files, job metadata, and symlinks targeting the workspace fail.

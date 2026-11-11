@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobStore.js";
 import { runProvider } from "./runner.js";
-import { DEFAULT_TIMEOUT_MS, isFinished, Job, JobStatus, providerLabel, Provider, TaskRequest } from "./tasks.js";
+import { createScratch } from "./scratch.js";
+import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 interface ActiveJob {
@@ -38,6 +39,10 @@ export class JobManager {
     };
     await this.store.create(job);
     try {
+      if (mode === "read-only" && isCodexProvider(job.provider)) {
+        job.scratch = await createScratch(job.workspace, this.store.directory(job.id));
+        await this.store.write(job);
+      }
       if (mode === "edit") await this.store.acquireEdit(job);
       if (this.closing) throw new Error("Delegation server is shutting down.");
     } catch (error) {

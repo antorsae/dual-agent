@@ -4,7 +4,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import { stat } from "node:fs/promises";
 import { JobManager } from "./jobs.js";
 import { formatDuration, notifyChannel } from "./notifications.js";
-import { ExecutionMode, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
+import { ExecutionMode, isCodexProvider, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
 
 const MAX_RESULT_CHARS = 64000;
 const stringArg = (args: Record<string, unknown>, key: string, required = false): string | undefined => {
@@ -45,6 +45,9 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const serverName = options.serverName ?? `${provider}-delegate`;
   const prefix = options.toolPrefix ?? `delegate_${provider}`;
   const label = options.label ?? providerLabel(provider);
+  const scratchGuidance = isCodexProvider(provider)
+    ? " Read-only jobs may run tests using an isolated writable scratch directory; project files remain read-only. Temporary files and common caches are redirected there. Keep mode read-only for reviews that run tests."
+    : "";
   const enableChannel = options.enableChannel ?? provider !== "claude";
   const channelSource = options.channelSource ?? serverName;
   const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
@@ -69,7 +72,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const common = {
     cwd: { type: "string", description: "Optional absolute project directory. Defaults to CLAUDE_PROJECT_DIR, then the directory where the host launched this server. Pass explicitly to target another project. The resolved path is returned with the job." },
     files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." },
-    mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." },
+    mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." + scratchGuidance },
     wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
     timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: `Hard limit in milliseconds (default two hours) that kills the worker and discards its answer. Leave unset unless the user asks for a limit; reviews can take from minutes to over an hour. Bound your own waiting with ${prefix}_status wait_ms instead.` },
   };
@@ -81,7 +84,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   ];
   const tools = kinds.map(([suffix, type, description]) => ({
     name: prefix + suffix,
-    description: description + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
+    description: description + (type !== "implement" ? scratchGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
     inputSchema: {
       type: "object" as const, additionalProperties: false,
       properties: { [type === "plan-review" ? "plan" : "prompt"]: { type: "string", description: "Complete task instructions, requirements, and constraints for this call." }, ...common },
@@ -107,6 +110,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     const paths = {
       job: manager.store.file(job.id, "job.json"), result: manager.store.file(job.id, "result.md"),
       stdout: manager.store.file(job.id, "stdout.log"), stderr: manager.store.file(job.id, "stderr.log"),
+      ...(job.scratch ? { scratch: job.scratch } : {}),
     };
     const output = isFinished(job) ? await manager.store.result(job.id) : "";
     const cancelRequested = await manager.store.cancellationRequested(job.id);
@@ -125,6 +129,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr${activity}`,
       ...(job.sessionId ? [`**Session ID**: ${job.sessionId}`] : []), ...(job.error ? [`**Error**: ${job.error}`] : []),
       `**Metadata**: ${paths.job}`, `**Result**: ${paths.result}`, `**Stdout log**: ${paths.stdout}`, `**Stderr log**: ${paths.stderr}`,
+      ...(job.scratch ? [`**Scratch directory**: ${job.scratch} (writable; project files remain read-only)`] : []),
       ...(excerpt ? ["", "## Result", "", excerpt, ...(output.length > excerpt.length ? [`\nResult excerpt truncated. Read the full answer from ${paths.result}.`] : [])] : []),
       ...(!isFinished(job) ? [`\n${runningGuidance} ${completionGuidance}`] : []),
     ].join("\n");

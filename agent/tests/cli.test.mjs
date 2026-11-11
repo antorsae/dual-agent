@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -8,15 +8,17 @@ import { test } from "node:test";
 
 const cli = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 async function fixture(t) {
-  const dir = await mkdtemp(join(tmpdir(), "dual-agent-cli-"));
-  t.after(() => rm(dir, { recursive: true, force: true }));
+  const root = await mkdtemp(join(tmpdir(), "dual-agent-cli-"));
+  const dir = join(root, "project");
+  await mkdir(dir);
+  t.after(() => rm(root, { recursive: true, force: true }));
   const binary = join(dir, "fake codex $'quoted");
   const capture = join(dir, "capture.json");
   await writeFile(binary, await readFile(new URL("./fixtures/fake-agent.mjs", import.meta.url), "utf8"), { mode: 0o755 });
   return {
     dir, capture,
     run(args, overrides = {}) {
-      const env = { ...process.env, CODEX_BIN: binary, DUAL_AGENT_STATE_DIR: join(dir, "state"), DUAL_AGENT_CAPTURE: capture, DUAL_AGENT_EXIT: "0", DUAL_AGENT_DELAY: "0", DUAL_AGENT_OUTPUT_SIZE: "", ...overrides };
+      const env = { ...process.env, CODEX_BIN: binary, DUAL_AGENT_STATE_DIR: join(root, "state"), DUAL_AGENT_CAPTURE: capture, DUAL_AGENT_EXIT: "0", DUAL_AGENT_DELAY: "0", DUAL_AGENT_OUTPUT_SIZE: "", ...overrides };
       const result = spawnSync(process.execPath, [cli, ...args], { cwd: dir, env, encoding: "utf8", timeout: 5000 });
       assert.ifError(result.error);
       return result;
@@ -35,7 +37,10 @@ for (const optionPosition of ["before", "after"]) {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, "fixture answer\n");
     const capture = await f.args();
-    assert.deepEqual(capture.args.slice(0, 3), ["exec", "--sandbox", "read-only"]);
+    assert.equal(capture.args[0], "exec");
+    assert.ok(capture.args.includes("--strict-config"));
+    assert.ok(capture.args.some(arg => arg.startsWith("default_permissions=")));
+    assert.ok(capture.env.DUAL_AGENT_SCRATCH_DIR);
     const args = [null, null, capture.input];
     assert.match(args[2], /# Task: REVIEW/);
     assert.ok(args[2].includes(task[1]));

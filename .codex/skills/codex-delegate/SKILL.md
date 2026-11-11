@@ -19,6 +19,12 @@ project or if the host has changed projects after launch. Review, plan-review,
 and custom tasks default to `read-only`; implementation defaults to `edit`.
 For a custom task that needs edits, explicitly set `mode: "edit"`.
 
+Read-only jobs can run tests and experiments in an isolated writable scratch
+directory while project files remain read-only. Temporary files and common test
+caches are redirected there. Keep `mode: "read-only"` for reviews that execute
+tests; redirect other outputs or copy inputs into scratch when needed. The tool
+response exposes `paths.scratch`, retained with the job results.
+
 An independent review is useful after a complex implementation or when choosing
 between substantial approaches. Skip delegation for trivial changes or when the
 user asks to work without it. Use implementation delegation only for a bounded
