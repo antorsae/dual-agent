@@ -1,169 +1,76 @@
 #!/bin/bash
-#
-# Uninstall script for Dual Agent Development Environment
-# Removes registrations and installed skills; preserves task data
-#
+# Remove registrations and installed skills; preserve profiles, projects, and jobs.
+set -euo pipefail
 
-set -e
-
-# Colors
-RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo -e "${BLUE}=======================================${NC}"
-echo -e "${BLUE}  Dual Agent Environment Uninstall${NC}"
-echo -e "${BLUE}=======================================${NC}"
-echo ""
-
-# Track what was removed
+source "$SCRIPT_DIR/scripts/integrations.sh"
 REMOVED=0
+CLAUDE_SERVERS=()
+CODEX_SERVERS=()
 
-# 1. Remove MCP servers
+remove_server() {
+    local host="$1" server="$2" config="$HOME/.claude.json" updated
+    local -a args=(mcp remove "$server")
+    if [ "$host" = "claude" ]; then args+=(--scope user); fi
+    if "$host" "${args[@]}" 2>/dev/null; then
+        echo -e "  ${GREEN}[OK]${NC} Removed $server from $host"
+    elif [ "$host" = "claude" ] && [ -f "$config" ] && command -v jq >/dev/null &&
+        jq -e --arg server "$server" '.mcpServers[$server]' "$config" >/dev/null 2>&1; then
+        updated=$(jq --arg server "$server" 'del(.mcpServers[$server])' "$config")
+        printf '%s\n' "$updated" > "$config"
+        echo -e "  ${GREEN}[OK]${NC} Removed $server from $config"
+    else
+        echo -e "  ${YELLOW}[SKIP]${NC} $server not found in $host"
+        return 0
+    fi
+    REMOVED=$((REMOVED + 1))
+}
+
+remove_skills() {
+    local directory="$1" skill
+    shift
+    for skill in "$@"; do
+        if [ -d "$directory/$skill" ]; then
+            rm -rf "$directory/$skill"
+            echo -e "  ${GREEN}[OK]${NC} Removed $directory/$skill"
+            REMOVED=$((REMOVED + 1))
+        fi
+    done
+}
+
+echo -e "${BLUE}Dual Agent Environment Uninstall${NC}"
 echo -e "${YELLOW}Removing MCP servers...${NC}"
-if claude mcp remove codex-delegate --scope user 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    # Fallback: remove from ~/.claude.json manually
-    CLAUDE_JSON="$HOME/.claude.json"
-    if [ -f "$CLAUDE_JSON" ] && command -v jq &>/dev/null; then
-        if jq -e '.mcpServers["codex-delegate"]' "$CLAUDE_JSON" >/dev/null 2>&1; then
-            UPDATED=$(jq 'del(.mcpServers["codex-delegate"])' "$CLAUDE_JSON")
-            echo "$UPDATED" > "$CLAUDE_JSON"
-            echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate from ~/.claude.json"
-            REMOVED=$((REMOVED + 1))
-        else
-            echo -e "  ${YELLOW}[SKIP]${NC} codex-delegate not found in MCP config"
-        fi
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} codex-delegate MCP server not found"
-    fi
-fi
-
-if claude mcp remove rosalind-delegate --scope user 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    CLAUDE_JSON="$HOME/.claude.json"
-    if [ -f "$CLAUDE_JSON" ] && command -v jq &>/dev/null; then
-        if jq -e '.mcpServers["rosalind-delegate"]' "$CLAUDE_JSON" >/dev/null 2>&1; then
-            UPDATED=$(jq 'del(.mcpServers["rosalind-delegate"])' "$CLAUDE_JSON")
-            echo "$UPDATED" > "$CLAUDE_JSON"
-            echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate from ~/.claude.json"
-            REMOVED=$((REMOVED + 1))
-        else
-            echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate not found in MCP config"
-        fi
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
-    fi
-fi
-
-if claude mcp remove gemini-delegate --scope user 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    CLAUDE_JSON="$HOME/.claude.json"
-    if [ -f "$CLAUDE_JSON" ] && command -v jq &>/dev/null; then
-        if jq -e '.mcpServers["gemini-delegate"]' "$CLAUDE_JSON" >/dev/null 2>&1; then
-            UPDATED=$(jq 'del(.mcpServers["gemini-delegate"])' "$CLAUDE_JSON")
-            echo "$UPDATED" > "$CLAUDE_JSON"
-            echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate from ~/.claude.json"
-            REMOVED=$((REMOVED + 1))
-        else
-            echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate not found in MCP config"
-        fi
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate MCP server not found"
-    fi
-fi
-
-if codex mcp remove claude-delegate 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed claude-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} claude-delegate MCP server not found"
-fi
-
-if codex mcp remove rosalind-delegate 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed rosalind-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
-fi
-
-if codex mcp remove gemini-delegate 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate MCP server"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate MCP server not found"
-fi
-
-if codex mcp remove codex-delegate 2>/dev/null; then
-    echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate MCP server from Codex"
-    REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} codex-delegate MCP server not found in Codex"
-fi
-
-# 2. Remove current and legacy Claude skills
-echo -e "${YELLOW}Removing Claude Code skills...${NC}"
-CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-CLAUDE_SKILLS=(codex-delegate rosalind-delegate gemini-delegate codex-read codex-status codex-implement codex-plan-review codex-review)
-
-for skill in "${CLAUDE_SKILLS[@]}"; do
-    if [ -d "$CLAUDE_SKILLS_DIR/$skill" ]; then
-        rm -rf "$CLAUDE_SKILLS_DIR/$skill"
-        echo -e "  ${GREEN}[OK]${NC} Removed Claude skill: $skill"
-        REMOVED=$((REMOVED + 1))
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} Claude skill not found: $skill"
-    fi
+for index in "${!INTEGRATIONS[@]}"; do
+    load_integration "$index"
+    server="$INTEGRATION_PROVIDER-delegate"
+    for host in $INTEGRATION_HOSTS; do
+        remove_server "$host" "$server"
+        case "$host" in
+            claude) CLAUDE_SERVERS+=("$server") ;;
+            codex) CODEX_SERVERS+=("$server") ;;
+        esac
+    done
 done
 
-# 3. Remove current and legacy Codex skills
-echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
-CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-CODEX_SKILLS=(claude-delegate codex-delegate rosalind-delegate gemini-delegate claude-status read-task respond)
-
-for skill in "${CODEX_SKILLS[@]}"; do
-    if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then
-        rm -rf "$CODEX_SKILLS_DIR/$skill"
-        echo -e "  ${GREEN}[OK]${NC} Removed Codex skill: $skill"
-        REMOVED=$((REMOVED + 1))
-    else
-        echo -e "  ${YELLOW}[SKIP]${NC} Codex skill not found: $skill"
-    fi
-done
-
-# Also check additional Codex config directories
+# Include retired skills so upgrades can still be fully uninstalled.
+CLAUDE_SKILLS=("${CLAUDE_SERVERS[@]}" codex-read codex-status codex-implement codex-plan-review codex-review)
+CODEX_SKILLS=("${CODEX_SERVERS[@]}" claude-status read-task respond)
+echo -e "${YELLOW}Removing host skills...${NC}"
+remove_skills "$HOME/.claude/skills" "${CLAUDE_SKILLS[@]}"
+remove_skills "${CODEX_HOME:-$HOME/.codex}/skills" "${CODEX_SKILLS[@]}"
 for codex_dir in "$HOME"/.codex*/; do
-    skills_dir="${codex_dir}skills"
-    if [ -d "$skills_dir" ]; then
-        for skill in "${CODEX_SKILLS[@]}"; do
-            if [ -d "$skills_dir/$skill" ]; then
-                rm -rf "$skills_dir/$skill"
-                echo -e "  ${GREEN}[OK]${NC} Removed skill '$skill' from ${codex_dir}"
-                REMOVED=$((REMOVED + 1))
-            fi
-        done
-    fi
+    remove_skills "${codex_dir}skills" "${CODEX_SKILLS[@]}"
 done
 
-# 4. Remove legacy permissions and obsolete settings-based MCP registration
-echo -e "${YELLOW}Removing dual-agent config from Claude settings...${NC}"
+# Remove legacy permissions and obsolete settings-based MCP registrations.
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-
-if [ -f "$CLAUDE_SETTINGS" ] && command -v jq &>/dev/null; then
-    # Use a temp file for the jq filter to avoid shell quoting issues
-    # with embedded $() and double quotes in permission strings
-    TMPJQ=$(mktemp)
-    cat > "$TMPJQ" <<'JQEOF'
+if [ -f "$CLAUDE_SETTINGS" ] && command -v jq >/dev/null; then
+    UPDATED=$(jq --arg servers "${CLAUDE_SERVERS[*]}" '
 if .permissions.allow then .permissions.allow -= [
   "Bash(cat .agent-collab:*)",
   "Bash(echo idle > .agent-collab/status)",
@@ -173,30 +80,13 @@ if .permissions.allow then .permissions.allow -= [
   "Bash(while [ \"$(cat .agent-collab/status)\" != \"done\" ]; do sleep:*)",
   "Bash(tmux send-keys:*)"
 ] else . end
-| del(.mcpServers["codex-delegate"])
-| del(.mcpServers["rosalind-delegate"])
-| del(.mcpServers["gemini-delegate"])
-JQEOF
-    UPDATED=$(jq -f "$TMPJQ" "$CLAUDE_SETTINGS")
-    rm -f "$TMPJQ"
-    echo "$UPDATED" > "$CLAUDE_SETTINGS"
-    echo -e "  ${GREEN}[OK]${NC} Removed dual-agent permissions and MCP server from settings"
+| reduce ($servers | split(" "))[] as $server (. ; del(.mcpServers[$server]))
+' "$CLAUDE_SETTINGS")
+    printf '%s\n' "$UPDATED" > "$CLAUDE_SETTINGS"
+    echo -e "  ${GREEN}[OK]${NC} Removed legacy dual-agent settings"
     REMOVED=$((REMOVED + 1))
-else
-    echo -e "  ${YELLOW}[SKIP]${NC} Claude settings file not found or jq not available"
 fi
 
-echo ""
-echo -e "${GREEN}=======================================${NC}"
-echo -e "${GREEN}  Uninstall Complete!${NC}"
-echo -e "${GREEN}=======================================${NC}"
-echo ""
-if [ $REMOVED -gt 0 ]; then
-    echo -e "Removed ${GREEN}${REMOVED}${NC} items."
-else
-    echo -e "${YELLOW}Nothing to remove — environment was already clean.${NC}"
-fi
-echo ""
-echo -e "${BLUE}Note:${NC} Restart Claude Code and Codex to unload MCP tools."
+echo -e "${GREEN}Uninstall Complete!${NC}"
+echo "Removed $REMOVED items. Restart Claude Code and Codex to unload MCP tools."
 echo "Saved task results and project files were preserved."
-echo ""

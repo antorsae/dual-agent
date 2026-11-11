@@ -198,6 +198,9 @@ These explicit options skip the interactive questions:
 | `--codex-from-codex` | Codex delegation for Codex |
 | `--all` | All delegation integrations |
 
+Options can be combined, for example `./setup-dual-agent.sh --claude-mcp --gemini-mcp`.
+Each selected integration is installed once, even when options overlap.
+
 Build and registration errors stop setup with the underlying diagnostic. Setup does not write project context or `.gitignore` files.
 
 Installation commands are quiet by default and save their output to a temporary
@@ -244,6 +247,9 @@ npm test
 ```
 
 Tests use fake agent executables and temporary state directories. They do not submit model requests or alter actual MCP registrations. Generated dependencies and build output are ignored by Git.
+
+Setup and uninstall share the integration catalog in [scripts/integrations.sh](scripts/integrations.sh).
+The catalog defines menu order, flags, providers, hosts, and profiles; shared functions handle registration, skills, and removal.
 
 ## License
 
