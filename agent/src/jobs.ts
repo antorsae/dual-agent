@@ -22,7 +22,7 @@ export class JobManager {
   }
   async submit(request: TaskRequest): Promise<Job> {
     if (this.closing) throw new Error("Delegation server is shutting down.");
-    if (!["codex", "claude", "rosalind"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
+    if (!["codex", "claude", "rosalind", "gemini"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
     if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("A nonempty prompt is required.");
     const mode = request.mode ?? (request.type === "implement" ? "edit" : "read-only");
     if (!["read-only", "edit"].includes(mode)) throw new Error("mode must be read-only or edit.");

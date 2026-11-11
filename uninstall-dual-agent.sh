@@ -64,6 +64,25 @@ else
     fi
 fi
 
+if claude mcp remove gemini-delegate --scope user 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate MCP server"
+    REMOVED=$((REMOVED + 1))
+else
+    CLAUDE_JSON="$HOME/.claude.json"
+    if [ -f "$CLAUDE_JSON" ] && command -v jq &>/dev/null; then
+        if jq -e '.mcpServers["gemini-delegate"]' "$CLAUDE_JSON" >/dev/null 2>&1; then
+            UPDATED=$(jq 'del(.mcpServers["gemini-delegate"])' "$CLAUDE_JSON")
+            echo "$UPDATED" > "$CLAUDE_JSON"
+            echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate from ~/.claude.json"
+            REMOVED=$((REMOVED + 1))
+        else
+            echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate not found in MCP config"
+        fi
+    else
+        echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate MCP server not found"
+    fi
+fi
+
 if codex mcp remove claude-delegate 2>/dev/null; then
     echo -e "  ${GREEN}[OK]${NC} Removed claude-delegate MCP server"
     REMOVED=$((REMOVED + 1))
@@ -78,6 +97,13 @@ else
     echo -e "  ${YELLOW}[SKIP]${NC} rosalind-delegate MCP server not found"
 fi
 
+if codex mcp remove gemini-delegate 2>/dev/null; then
+    echo -e "  ${GREEN}[OK]${NC} Removed gemini-delegate MCP server"
+    REMOVED=$((REMOVED + 1))
+else
+    echo -e "  ${YELLOW}[SKIP]${NC} gemini-delegate MCP server not found"
+fi
+
 if codex mcp remove codex-delegate 2>/dev/null; then
     echo -e "  ${GREEN}[OK]${NC} Removed codex-delegate MCP server from Codex"
     REMOVED=$((REMOVED + 1))
@@ -88,7 +114,7 @@ fi
 # 2. Remove current and legacy Claude skills
 echo -e "${YELLOW}Removing Claude Code skills...${NC}"
 CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
-CLAUDE_SKILLS=(codex-delegate rosalind-delegate codex-read codex-status codex-implement codex-plan-review codex-review)
+CLAUDE_SKILLS=(codex-delegate rosalind-delegate gemini-delegate codex-read codex-status codex-implement codex-plan-review codex-review)
 
 for skill in "${CLAUDE_SKILLS[@]}"; do
     if [ -d "$CLAUDE_SKILLS_DIR/$skill" ]; then
@@ -103,7 +129,7 @@ done
 # 3. Remove current and legacy Codex skills
 echo -e "${YELLOW}Removing Codex CLI skills...${NC}"
 CODEX_SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
-CODEX_SKILLS=(claude-delegate codex-delegate rosalind-delegate claude-status read-task respond)
+CODEX_SKILLS=(claude-delegate codex-delegate rosalind-delegate gemini-delegate claude-status read-task respond)
 
 for skill in "${CODEX_SKILLS[@]}"; do
     if [ -d "$CODEX_SKILLS_DIR/$skill" ]; then
@@ -149,6 +175,7 @@ if .permissions.allow then .permissions.allow -= [
 ] else . end
 | del(.mcpServers["codex-delegate"])
 | del(.mcpServers["rosalind-delegate"])
+| del(.mcpServers["gemini-delegate"])
 JQEOF
     UPDATED=$(jq -f "$TMPJQ" "$CLAUDE_SETTINGS")
     rm -f "$TMPJQ"

@@ -19,9 +19,10 @@ export interface RunResult {
 
 export function commandFor(job: Job, store: JobStore): { command: string; args: string[] } {
   if (isCodexProvider(job.provider)) {
+    const profile = job.provider === "rosalind" ? "rosalind_delegate" : job.provider === "gemini" ? "gemini" : undefined;
     return {
       command: process.env.CODEX_BIN || "codex-pool",
-      args: ["exec", ...(job.provider === "rosalind" ? ["-p", "rosalind_delegate"] : []),
+      args: ["exec", ...(profile ? ["-p", profile] : []),
         ...(job.mode === "edit" ? ["--approve-for-me"] : ["--sandbox", "read-only", "-c", 'approval_policy="never"']),
         // The host selected this project; allow non-Git directories without
         // changing the job's sandbox or approval policy.
@@ -30,7 +31,8 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
         // Complete disabled entries also work when these servers aren't registered.
         "-c", 'mcp_servers.claude-delegate={command="node",args=[],enabled=false}',
         "-c", 'mcp_servers.codex-delegate={command="node",args=[],enabled=false}',
-        "-c", 'mcp_servers.rosalind-delegate={command="node",args=[],enabled=false}', "-"],
+        "-c", 'mcp_servers.rosalind-delegate={command="node",args=[],enabled=false}',
+        "-c", 'mcp_servers.gemini-delegate={command="node",args=[],enabled=false}', "-"],
     };
   }
   return {

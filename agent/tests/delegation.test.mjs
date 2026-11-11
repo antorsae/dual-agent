@@ -47,8 +47,8 @@ async function fixture(t) {
       : provider === "claude"
         ? "../dist/claudeMcp.js"
         : host === "codex"
-          ? "../dist/rosalindCodexMcp.js"
-          : "../dist/rosalindMcp.js";
+          ? `../dist/${provider}CodexMcp.js`
+          : `../dist/${provider}Mcp.js`;
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [fileURLToPath(new URL(server, import.meta.url))],
@@ -70,47 +70,60 @@ async function fixture(t) {
   return { root, project, state, capture, requests, descendants, connect, store: new JobStore(state) };
 }
 
-test("Rosalind exposes the same tools and uses its Codex profile", async t => {
-  const f = await fixture(t);
-  const claudeHost = await f.connect("rosalind");
-  const discovery = await claudeHost.client.listTools();
-  assert.equal(discovery.tools.length, 7);
-  assert.deepEqual(claudeHost.client.getServerCapabilities().experimental?.["claude/channel"], {});
-  assert.match(claudeHost.client.getInstructions(), /delegate_rosalind_status/);
-  const result = await claudeHost.call("", { prompt: "Review with Rosalind", cwd: f.project, wait: true });
-  assert.equal(result.structuredContent.status, "completed", text(result));
-  assert.equal(result.structuredContent.provider, "rosalind");
-  const request = (await f.requests()).at(-1);
-  assert.equal(request.args[request.args.indexOf("-p") + 1], "rosalind_delegate");
-  assert.ok(request.args.includes("--skip-git-repo-check"));
-  assert.ok(request.args.some(arg => arg.includes("rosalind-delegate") && arg.includes("enabled=false")));
+for (const [provider, profile] of [["rosalind", "rosalind_delegate"], ["gemini", "gemini"]]) {
+  test(`${provider} exposes the same tools and uses its Codex profile`, async t => {
+    const f = await fixture(t);
+    const claudeHost = await f.connect(provider);
+    const discovery = await claudeHost.client.listTools();
+    assert.equal(discovery.tools.length, 7);
+    assert.deepEqual(claudeHost.client.getServerCapabilities().experimental?.["claude/channel"], {});
+    assert.match(claudeHost.client.getInstructions(), new RegExp(`delegate_${provider}_status`));
+    const result = await claudeHost.call("", { prompt: `Review with ${provider}`, cwd: f.project, wait: true });
+    assert.equal(result.structuredContent.status, "completed", text(result));
+    assert.equal(result.structuredContent.provider, provider);
+    assert.equal(result.structuredContent.session_id, "fixture-codex-session");
+    assert.equal(result.structuredContent.output, "fixture answer\n");
+    const request = (await f.requests()).at(-1);
+    assert.equal(request.args[request.args.indexOf("-p") + 1], profile);
+    assert.ok(request.args.includes("--skip-git-repo-check"));
+    assert.equal(request.args[request.args.indexOf("--sandbox") + 1], "read-only");
+    for (const server of ["claude", "codex", "rosalind", "gemini"]) {
+      assert.ok(request.args.some(arg => arg.includes(`${server}-delegate`) && arg.includes("enabled=false")));
+    }
 
-  const codexHost = await f.connect("rosalind", {}, f.project, "codex");
-  const codexDiscovery = await codexHost.client.listTools();
-  assert.equal(codexDiscovery.tools.length, 7);
-  assert.equal(codexHost.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
-  const codexResult = await codexHost.call("_review", { prompt: "Review from Codex", cwd: f.project, wait: true });
-  assert.equal(codexResult.structuredContent.status, "completed", text(codexResult));
-  const codexRequest = (await f.requests()).at(-1);
-  assert.equal(codexRequest.args[codexRequest.args.indexOf("-p") + 1], "rosalind_delegate");
+    const codexHost = await f.connect(provider, {}, f.project, "codex");
+    const codexDiscovery = await codexHost.client.listTools();
+    assert.equal(codexDiscovery.tools.length, 7);
+    assert.equal(codexHost.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+    assert.equal(codexHost.client.getInstructions(), undefined);
+    const codexResult = await codexHost.call("_review", { prompt: "Review from Codex", cwd: f.project, wait: true });
+    assert.equal(codexResult.structuredContent.status, "completed", text(codexResult));
+    const codexRequest = (await f.requests()).at(-1);
+    assert.equal(codexRequest.args[codexRequest.args.indexOf("-p") + 1], profile);
 
-  const editResult = await claudeHost.call("_implement", { prompt: "Implement with Rosalind", cwd: f.project, wait: true });
-  assert.equal(editResult.structuredContent.status, "completed", text(editResult));
-  const editRequest = (await f.requests()).at(-1);
-  assert.equal(editRequest.args[editRequest.args.indexOf("-p") + 1], "rosalind_delegate");
-  assert.ok(editRequest.args.includes("--approve-for-me"));
+    const editResult = await claudeHost.call("_implement", { prompt: `Implement with ${provider}`, cwd: f.project, wait: true });
+    assert.equal(editResult.structuredContent.status, "completed", text(editResult));
+    const editRequest = (await f.requests()).at(-1);
+    assert.equal(editRequest.args[editRequest.args.indexOf("-p") + 1], profile);
+    assert.ok(editRequest.args.includes("--approve-for-me"));
 
-  const codex = await f.connect("codex");
-  const ordinary = await codex.call("", { prompt: "Ordinary Codex job", cwd: f.project, wait: true });
-  const isolated = await claudeHost.call("_status", { task_id: ordinary.structuredContent.task_id });
-  assert.equal(isolated.isError, true, text(isolated));
+    const plan = await codexHost.call("_plan_review", { plan: `Plan for ${provider}`, cwd: f.project, wait: true });
+    assert.equal(plan.structuredContent.status, "completed", text(plan));
+    assert.ok((await f.requests()).at(-1).input.includes(`Plan for ${provider}`));
+    assert.equal(codexHost.channelEvents.length, 0);
 
-  const started = await claudeHost.call("", { prompt: "[slow] Rosalind channel result", cwd: f.project });
-  const event = await eventually(() => claudeHost.channelEvents.find(event => event.meta?.task_id === started.structuredContent.task_id));
-  assert.equal(event.meta.task_type, "custom");
-  assert.equal(event.meta.status, "completed");
-  assert.match(event.content, /delegate_rosalind_status/);
-});
+    const codex = await f.connect("codex");
+    const ordinary = await codex.call("", { prompt: "Ordinary Codex job", cwd: f.project, wait: true });
+    const isolated = await claudeHost.call("_status", { task_id: ordinary.structuredContent.task_id });
+    assert.equal(isolated.isError, true, text(isolated));
+
+    const started = await claudeHost.call("", { prompt: `[slow] ${provider} channel result`, cwd: f.project });
+    const event = await eventually(() => claudeHost.channelEvents.find(event => event.meta?.task_id === started.structuredContent.task_id));
+    assert.equal(event.meta.task_type, "custom");
+    assert.equal(event.meta.status, "completed");
+    assert.match(event.content, new RegExp(`delegate_${provider}_status`));
+  });
+}
 
 test("Codex-hosted Codex delegation uses the default profile without the Claude channel", async t => {
   const f = await fixture(t);
@@ -125,7 +138,36 @@ test("Codex-hosted Codex delegation uses the default profile without the Claude 
   const request = (await f.requests()).at(-1);
   assert.ok(!request.args.includes("-p"));
   assert.ok(request.args.some(arg => arg.includes("codex-delegate") && arg.includes("enabled=false")));
+  assert.ok(request.args.some(arg => arg.includes("gemini-delegate") && arg.includes("enabled=false")));
   assert.equal(c.channelEvents.length, 0);
+});
+
+test("Gemini shares edit locks, accepts cancellation across hosts, and recovers saved jobs", async t => {
+  const f = await fixture(t);
+  const first = await f.connect("gemini", {}, f.project, "codex");
+  const otherHost = await f.connect("gemini");
+  const codex = await f.connect("codex");
+  const started = await first.call("_implement", { prompt: "[hold] Gemini edit", cwd: f.project });
+  const id = started.structuredContent.task_id;
+  await eventually(async () => (await f.requests()).length > 0);
+  const blocked = await codex.call("_implement", { prompt: "Conflicting edit", cwd: f.project });
+  assert.equal(blocked.isError, true, text(blocked));
+  assert.ok(text(blocked).includes(id));
+  const cancelled = await otherHost.call("_cancel", { task_id: id });
+  assert.equal(cancelled.structuredContent.status, "cancelled", text(cancelled));
+  const completed = await codex.call("_implement", { prompt: "Edit after cancellation", cwd: f.project, wait: true });
+  assert.equal(completed.structuredContent.status, "completed", text(completed));
+  const geminiResult = await first.call("", { prompt: "Saved Gemini answer", wait: true });
+  await first.client.close();
+  const restarted = await f.connect("gemini", {}, f.project, "codex");
+  const recovered = await restarted.call("_status", { task_id: geminiResult.structuredContent.task_id });
+  assert.equal(recovered.structuredContent.output, "fixture answer\n");
+  const listed = await restarted.call("_list", {});
+  assert.deepEqual(new Set(listed.structuredContent.jobs.map(job => job.task_id)), new Set([id, geminiResult.structuredContent.task_id]));
+  assert.equal((await codex.call("_status", { task_id: id })).isError, true);
+  const failed = await restarted.call("", { prompt: "[fail] Gemini failure", wait: true });
+  assert.equal(failed.structuredContent.status, "failed");
+  assert.match(failed.structuredContent.error, /Gemini exited with code 7/);
 });
 
 for (const provider of ["codex", "claude"]) {

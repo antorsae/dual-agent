@@ -1,6 +1,6 @@
 # Delegation servers and CLI
 
-`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
+`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. `rosalindMcp.ts` and `geminiMcp.ts` expose Codex profiles to Claude Code, with `rosalindCodexMcp.ts` and `geminiCodexMcp.ts` for Codex hosts. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
 
 ## Build and registration
 
@@ -12,7 +12,8 @@ npm run build
 Run the repository's `./setup-dual-agent.sh` to choose integrations interactively.
 Choice 1 installs Codex delegation for Claude Code; choice 2 installs Claude
 delegation for Codex; choice 3 installs Rosalind delegation for both hosts;
-choice 4 installs Codex delegation for Codex.
+choice 4 installs Codex delegation for Codex; choice 5 installs Gemini delegation
+for both hosts using `codex -p gemini`.
 Each includes the MCP registration and companion host skill. Select the choices
 you need, or use `--both` for the two original directions. For manual
 registration, use the same absolute state directory in all commands:
@@ -40,6 +41,18 @@ codex mcp add rosalind-delegate \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/rosalindCodexMcp.js
 
+claude mcp add --scope user gemini-delegate \
+  --env CODEX_BIN=codex \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  -- node /FULL/PATH/TO/agent/dist/geminiMcp.js
+
+codex mcp add gemini-delegate \
+  --env CODEX_BIN=codex \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  -- node /FULL/PATH/TO/agent/dist/geminiCodexMcp.js
+
 codex mcp add codex-delegate \
   --env CODEX_BIN=codex-pool \
   --env CODEX_HOME=/absolute/path/to/codex-home \
@@ -49,11 +62,13 @@ codex mcp add codex-delegate \
 
 Codex gives MCP servers only a minimal environment. If a Codex model provider
 reads its API key from a variable (`env_key`), add `env_vars = ["THAT_VARIABLE"]`
-under `[mcp_servers.codex-delegate]` and `[mcp_servers.rosalind-delegate]` in
+under the relevant `[mcp_servers.codex-delegate]`, `[mcp_servers.rosalind-delegate]`,
+or `[mcp_servers.gemini-delegate]` table in
 Codex's `config.toml`. `codex mcp add` has no option for this; setup adds it.
 
 Restart the hosts to discover the tools. `npm run mcp`, `npm run codex-codex-mcp`,
-`npm run claude-mcp`, `npm run rosalind-mcp`, and `npm run rosalind-codex-mcp`
+`npm run claude-mcp`, `npm run rosalind-mcp`, `npm run rosalind-codex-mcp`,
+`npm run gemini-mcp`, and `npm run gemini-codex-mcp`
 are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for
 the Codex worker, and `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_EFFORT_LEVEL` for the
 Claude worker when configured; a saved effort is kept when setup reruns without it.
@@ -63,9 +78,15 @@ Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 and never creates or overwrites it. Pass `--verify-rosalind-profile` to run one
 live Codex request through the profile during setup.
 
+Gemini requires `$CODEX_HOME/gemini.config.toml` (default:
+`~/.codex/gemini.config.toml`). `./setup-dual-agent.sh --gemini-mcp` checks for
+this existing profile and installs both registrations and skills. The worker
+selects `-p gemini`; its model and authentication come from that profile.
+Installation preserves the profile and does not make a model request.
+
 ## Tool contract
 
-The prefix is `delegate_codex`, `delegate_claude`, or `delegate_rosalind`:
+The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `delegate_gemini`:
 
 | Suffix | Inputs |
 |--------|--------|
@@ -101,7 +122,8 @@ interactive Claude Code session with:
 claude --dangerously-load-development-channels server:codex-delegate
 ```
 
-Use `server:rosalind-delegate` for Rosalind's completion channel.
+Use `server:rosalind-delegate` for Rosalind's completion channel or
+`server:gemini-delegate` for Gemini's.
 
 Accept the local-development confirmation at startup. The development flag is
 ignored with `-p` or the Agent SDK. Channels require claude.ai or Console API-key
@@ -116,9 +138,10 @@ enabled or received its channel events. The reverse `claude-delegate` server and
 the Codex-hosted `codex-delegate` registration use status waits; they do not
 advertise Claude's channel capability to Codex.
 
-The Claude-hosted `rosalind-delegate` server uses the same channel behavior with
-`delegate_rosalind_status`. Its Codex-hosted registration uses bounded status
-waits and does not advertise the Claude channel capability.
+The Claude-hosted `rosalind-delegate` and `gemini-delegate` servers use the same
+channel behavior with `delegate_rosalind_status` and `delegate_gemini_status`.
+Their Codex-hosted registrations use bounded status
+waits and do not advertise the Claude channel capability.
 
 Events carry `task_id`, `task_type`, `status`, and `duration`. They describe
 `completed`, `failed`, `cancelled`, or `interrupted` jobs using the same persisted
@@ -131,7 +154,7 @@ collected through a waiting call does not need to be presented again.
 
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
-- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`; plain Codex jobs pass no profile, so they use the default configuration of the registered `CODEX_HOME`, not the calling session's profile. All delegation MCP servers are disabled in the child invocation.
+- Codex: `exec --skip-git-repo-check --json --output-last-message ...`, with a read-only sandbox and `approval_policy=never`, or `--approve-for-me` for editing. Rosalind adds `-p rosalind_delegate`; Gemini adds `-p gemini`. Plain Codex jobs pass no profile, so they use the default configuration of the registered `CODEX_HOME`, not the calling session's profile. All delegation MCP servers are disabled in the child invocation.
 - Claude: `--print --output-format stream-json --verbose`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate

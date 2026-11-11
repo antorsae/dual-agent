@@ -9,6 +9,7 @@
 #   ./setup-dual-agent.sh --mcp    # Alias for --codex-mcp
 #   ./setup-dual-agent.sh --claude-mcp  # Install Claude delegation for Codex
 #   ./setup-dual-agent.sh --rosalind-mcp # Install Rosalind delegation for Claude and Codex
+#   ./setup-dual-agent.sh --gemini-mcp # Install Gemini delegation for Claude and Codex
 #   ./setup-dual-agent.sh --codex-from-codex # Install Codex delegation for Codex
 #   ./setup-dual-agent.sh --both    # Install both delegation directions
 #   ./setup-dual-agent.sh --all    # Install all components (non-interactive)
@@ -168,6 +169,7 @@ INSTALL_MCP=0
 INSTALL_CLAUDE_MCP=0
 INSTALL_ROSALIND=0
 INSTALL_CODEX_FROM_CODEX=0
+INSTALL_GEMINI=0
 
 case "${1:-}" in
     --all)
@@ -175,10 +177,12 @@ case "${1:-}" in
         INSTALL_CLAUDE_MCP=1
         INSTALL_ROSALIND=1
         INSTALL_CODEX_FROM_CODEX=1
+        INSTALL_GEMINI=1
         ;;
     --codex-mcp|--mcp) INSTALL_MCP=1 ;;
     --claude-mcp) INSTALL_CLAUDE_MCP=1 ;;
     --rosalind-mcp|--rosalind) INSTALL_ROSALIND=1 ;;
+    --gemini-mcp|--gemini) INSTALL_GEMINI=1 ;;
     --codex-from-codex) INSTALL_CODEX_FROM_CODEX=1 ;;
     --verify-rosalind-profile) INSTALL_ROSALIND=1; VERIFY_ROSALIND_PROFILE=1 ;;
     --both) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1 ;;
@@ -188,6 +192,7 @@ case "${1:-}" in
         echo "  --codex-mcp  Use Codex from Claude Code (MCP tools and skill)"
         echo "  --claude-mcp Use Claude from Codex (MCP tools and skill)"
         echo "  --rosalind-mcp Use Rosalind (Codex profile) from Claude Code and Codex"
+        echo "  --gemini-mcp Use Gemini (Codex profile) from Claude Code and Codex"
         echo "  --codex-from-codex Use Codex from Codex (MCP tools and skill)"
         echo "  --verify-rosalind-profile Run one live Rosalind profile check"
         echo "  --both       Install both delegation integrations"
@@ -203,9 +208,10 @@ case "${1:-}" in
             echo "  2) $(selection_mark "$INSTALL_CLAUDE_MCP") Use Claude from Codex (MCP tools and skill)"
             echo "  3) $(selection_mark "$INSTALL_ROSALIND") Use Rosalind from Claude Code and Codex"
             echo "  4) $(selection_mark "$INSTALL_CODEX_FROM_CODEX") Use Codex from Codex (MCP tools and skill)"
+            echo "  5) $(selection_mark "$INSTALL_GEMINI") Use Gemini from Claude Code and Codex"
             echo "  a) Select all    n) Clear all    c) Continue"
-            if ! read -r -n 1 -p "Toggle 1-4, a/n, or c: " choice; then
-                fail "No selection received. Use --codex-mcp, --claude-mcp, --rosalind-mcp, --codex-from-codex, --both, or --all for unattended setup."
+            if ! read -r -n 1 -p "Toggle 1-5, a/n, or c: " choice; then
+                fail "No selection received. Use --codex-mcp, --claude-mcp, --rosalind-mcp, --gemini-mcp, --codex-from-codex, --both, or --all for unattended setup."
             fi
             echo ""
             case "$choice" in
@@ -213,8 +219,9 @@ case "${1:-}" in
                 2) INSTALL_CLAUDE_MCP=$((1 - INSTALL_CLAUDE_MCP)) ;;
                 3) INSTALL_ROSALIND=$((1 - INSTALL_ROSALIND)) ;;
                 4) INSTALL_CODEX_FROM_CODEX=$((1 - INSTALL_CODEX_FROM_CODEX)) ;;
-                a|A) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1; INSTALL_ROSALIND=1; INSTALL_CODEX_FROM_CODEX=1 ;;
-                n|N) INSTALL_MCP=0; INSTALL_CLAUDE_MCP=0; INSTALL_ROSALIND=0; INSTALL_CODEX_FROM_CODEX=0 ;;
+                5) INSTALL_GEMINI=$((1 - INSTALL_GEMINI)) ;;
+                a|A) INSTALL_MCP=1; INSTALL_CLAUDE_MCP=1; INSTALL_ROSALIND=1; INSTALL_CODEX_FROM_CODEX=1; INSTALL_GEMINI=1 ;;
+                n|N) INSTALL_MCP=0; INSTALL_CLAUDE_MCP=0; INSTALL_ROSALIND=0; INSTALL_CODEX_FROM_CODEX=0; INSTALL_GEMINI=0 ;;
                 c|C) break ;;
                 *) echo "Invalid choice" ;;
             esac
@@ -231,7 +238,7 @@ if [ "$INTERACTIVE_INSTALL" -eq 1 ] && [ "$INSTALL_ROSALIND" -eq 1 ] && [ "$VERI
     esac
 fi
 
-if [ "$INSTALL_MCP$INSTALL_CLAUDE_MCP$INSTALL_ROSALIND$INSTALL_CODEX_FROM_CODEX" = "0000" ]; then
+if [ "$INSTALL_MCP$INSTALL_CLAUDE_MCP$INSTALL_ROSALIND$INSTALL_CODEX_FROM_CODEX$INSTALL_GEMINI" = "00000" ]; then
     echo "Nothing selected. Exiting."
     exit 0
 fi
@@ -241,17 +248,17 @@ fi
 echo -e "${BLUE}[1/4]${NC} Checking prerequisites"
 detect_os
 MISSING=0
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_GEMINI" -eq 1 ]; then
     check_install claude "Install from: https://code.claude.com/docs/en/setup" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ] || [ "$INSTALL_GEMINI" -eq 1 ]; then
     check_install node "Install from: https://nodejs.org" || MISSING=1
     check_install npm "Install Node.js with npm" || MISSING=1
 fi
-if [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+if [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ] || [ "$INSTALL_GEMINI" -eq 1 ]; then
     check_install codex "Install from: https://github.com/openai/codex" || MISSING=1
 fi
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ] || [ "$INSTALL_GEMINI" -eq 1 ]; then
     DELEGATE_CODEX_BIN="${CODEX_BIN:-codex-pool}"
     if [ "$DELEGATE_CODEX_BIN" = "codex-pool" ] && ! command -v codex-pool &> /dev/null; then
         echo -e "  ${YELLOW}[WARN]${NC} codex-pool not found on PATH; falling back to codex"
@@ -275,6 +282,12 @@ AGENT_DIR="$SCRIPT_DIR/agent"
 DELEGATE_STATE_DIR="${DUAL_AGENT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/dual-agent}"
 case "$DELEGATE_STATE_DIR" in /*) ;; *) fail "DUAL_AGENT_STATE_DIR must be an absolute path." ;; esac
 DELEGATE_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+
+if [ "$INSTALL_GEMINI" -eq 1 ]; then
+    GEMINI_PROFILE_FILE="$DELEGATE_CODEX_HOME/gemini.config.toml"
+    [ -f "$GEMINI_PROFILE_FILE" ] || fail "Gemini Codex profile not found: $GEMINI_PROFILE_FILE. Configure codex -p gemini before installing Gemini."
+    echo "  Gemini Codex profile: using existing $GEMINI_PROFILE_FILE"
+fi
 
 if [ "$INSTALL_ROSALIND" -eq 1 ]; then
     ROSALIND_PROFILE_FILE="$DELEGATE_CODEX_HOME/rosalind_delegate.config.toml"
@@ -375,7 +388,7 @@ forward_codex_keys() {
 }
 
 echo -e "${BLUE}[2/4]${NC} Building agent package"
-if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ]; then
+if [ "$INSTALL_MCP" -eq 1 ] || [ "$INSTALL_CLAUDE_MCP" -eq 1 ] || [ "$INSTALL_ROSALIND" -eq 1 ] || [ "$INSTALL_CODEX_FROM_CODEX" -eq 1 ] || [ "$INSTALL_GEMINI" -eq 1 ]; then
     [ -d "$AGENT_DIR" ] || fail "Agent package not found: $AGENT_DIR"
     build_agent() { (cd "$AGENT_DIR" && npm ci && npm run build); }
     if ! run_step "MCP servers" build_agent; then
@@ -419,6 +432,29 @@ if [ "$INSTALL_ROSALIND" -eq 1 ]; then
     fi
     if ! run_step "rosalind-delegate Codex skill" install_skill "$SCRIPT_DIR/.codex/skills/rosalind-delegate" "$DELEGATE_CODEX_HOME/skills/rosalind-delegate"; then
         fail "Could not install the Codex Rosalind skill."
+    fi
+fi
+
+if [ "$INSTALL_GEMINI" -eq 1 ]; then
+    GEMINI_CLAUDE_SERVER_PATH="$AGENT_DIR/dist/geminiMcp.js"
+    GEMINI_CODEX_SERVER_PATH="$AGENT_DIR/dist/geminiCodexMcp.js"
+    [ -f "$GEMINI_CLAUDE_SERVER_PATH" ] || fail "MCP build output not found: $GEMINI_CLAUDE_SERVER_PATH"
+    [ -f "$GEMINI_CODEX_SERVER_PATH" ] || fail "MCP build output not found: $GEMINI_CODEX_SERVER_PATH"
+    GEMINI_SERVER_ENV=(--env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
+    run_logged claude mcp remove gemini-delegate --scope user || true
+    if ! run_step "gemini-delegate → Claude Code" claude mcp add --scope user gemini-delegate "${GEMINI_SERVER_ENV[@]}" -- node "$GEMINI_CLAUDE_SERVER_PATH"; then
+        fail "Could not register gemini-delegate for Claude. Fix the Claude CLI error above and rerun setup."
+    fi
+    run_logged codex mcp remove gemini-delegate || true
+    if ! run_step "gemini-delegate → Codex" codex mcp add gemini-delegate "${GEMINI_SERVER_ENV[@]}" -- node "$GEMINI_CODEX_SERVER_PATH"; then
+        fail "Could not register gemini-delegate for Codex. Fix the Codex CLI error above and rerun setup."
+    fi
+    forward_codex_keys gemini-delegate "$DELEGATE_CODEX_HOME/config.toml" "$GEMINI_PROFILE_FILE"
+    if ! run_step "gemini-delegate Claude skill" install_skill "$SCRIPT_DIR/.claude/skills/gemini-delegate" "$HOME/.claude/skills/gemini-delegate"; then
+        fail "Could not install the Claude Gemini skill."
+    fi
+    if ! run_step "gemini-delegate Codex skill" install_skill "$SCRIPT_DIR/.codex/skills/gemini-delegate" "$DELEGATE_CODEX_HOME/skills/gemini-delegate"; then
+        fail "Could not install the Codex Gemini skill."
     fi
 fi
 
@@ -472,6 +508,12 @@ if [ "$INSTALL_ROSALIND" -eq 1 ]; then
     echo "Tools: delegate_rosalind_review, delegate_rosalind_implement, delegate_rosalind_plan_review, delegate_rosalind"
     echo "Jobs: delegate_rosalind_status, delegate_rosalind_list, delegate_rosalind_cancel"
     echo "Check registrations: claude mcp get rosalind-delegate; codex mcp get rosalind-delegate"
+fi
+if [ "$INSTALL_GEMINI" -eq 1 ]; then
+    echo "Restart Claude Code and Codex, then use the delegate_gemini_* tools for Gemini with the gemini Codex profile."
+    echo "Tools: delegate_gemini_review, delegate_gemini_implement, delegate_gemini_plan_review, delegate_gemini"
+    echo "Jobs: delegate_gemini_status, delegate_gemini_list, delegate_gemini_cancel"
+    echo "Check registrations: claude mcp get gemini-delegate; codex mcp get gemini-delegate"
 fi
 if [ "$INSTALL_CLAUDE_MCP" -eq 1 ]; then
     echo "Restart Codex to load Claude's review, implementation, plan-review, and custom task tools."
