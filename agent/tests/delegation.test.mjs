@@ -177,6 +177,7 @@ test("Antigravity discovers seven native tools, pins its model, and runs reviews
   const c = await f.connect("agy", {}, f.project);
   const discovery = await c.client.listTools();
   assert.deepEqual(discovery.tools.map(tool => tool.name).sort(), ["", "_review", "_implement", "_plan_review", "_status", "_list", "_cancel"].map(suffix => "delegate_agy" + suffix).sort());
+  assert.match(discovery.tools.find(tool => tool.name === "delegate_agy_review").description, /save required external notes and complete parent\/submodule diffs inside the allowed worktree/);
   const result = await c.call("_review", { prompt: "[slow] Review quotes ' and\nnewlines", cwd: f.project, wait: true });
   const job = result.structuredContent;
   assert.equal(job.status, "completed", text(result));
@@ -186,6 +187,7 @@ test("Antigravity discovers seven native tools, pins its model, and runs reviews
   assert.equal(request.cwd, job.paths.scratch);
   assert.equal(JSON.parse(request.wireInput).event, "user");
   assert.ok(JSON.parse(request.wireInput).message.content.includes(f.project));
+  assert.match(JSON.parse(request.wireInput).message.content, /Review the supplied saved diffs and notes plus current source/);
   assert.equal(request.args[request.args.indexOf("--model") + 1], "fixture-model");
   assert.ok(!request.args.includes("exec"));
   assert.ok(!request.args.includes("--dangerously-skip-permissions"));
@@ -194,6 +196,8 @@ test("Antigravity discovers seven native tools, pins its model, and runs reviews
   assert.equal(settings.agentMode, "");
   assert.ok(settings.permissions.deny.includes(`write_file(${f.project})`));
   assert.ok(settings.permissions.deny.includes("mcp(*)"));
+  assert.equal(settings.allowNonWorkspaceAccess, false);
+  assert.deepEqual(settings.permissions.allow, [`read_file(${f.project})`, `write_file(${job.paths.scratch})`]);
   assert.ok(!settings.permissions.allow.some(rule => rule.startsWith("command(")));
   await eventually(() => c.channelEvents.some(event => event.meta.task_id === job.task_id));
   const edited = await c.call("_implement", { prompt: "edit", cwd: f.project, wait: true });
@@ -211,6 +215,22 @@ for (const [prompt, message] of [["[denied]", /denied tool call/], ["[is-error]"
     assert.equal(result.structuredContent.status, "failed");
     assert.match(result.structuredContent.error, message);
     assert.equal(c.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+  });
+}
+
+for (const prompt of ["[denied-actions-empty]", "[denied-actions-answer]"]) {
+  test(`Antigravity reports terminal read denials with ${prompt}`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect("agy", {}, f.project, "codex");
+    const result = await c.call("_review", { prompt, wait: true });
+    const job = result.structuredContent;
+    assert.equal(job.status, "failed");
+    assert.match(job.error, /denied tool actions: read_file/);
+    assert.match(job.error, /inside the allowed worktree/);
+    assert.doesNotMatch(job.error, /without a final answer/);
+    assert.equal(job.output, prompt === "[denied-actions-empty]" ? "" : "fixture answer\n");
+    assert.equal((await f.store.read(job.task_id)).exitCode, 0);
+    assert.equal((await f.store.read(job.task_id)).mode, "read-only");
   });
 }
 

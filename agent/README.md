@@ -178,6 +178,14 @@ inputs into scratch. Read-only reviews can run tests without selecting edit mode
 Scratch files are retained with the job and returned as `paths.scratch` for inspection.
 Antigravity uses the same cache variables but runs from scratch, with the original project path supplied in the prompt. Claude's read-only jobs keep their existing file-tool restriction.
 
+Antigravity's allowed source tree does not automatically include external Git
+metadata, `/tmp` notes, or dependencies behind outside-worktree symlinks. The host
+must stage required notes and complete parent/submodule patches (including new
+files and base commit IDs) inside the allowed worktree before review. The review
+prompt should require the saved diff plus source, not external Git commands.
+Native terminal `denied_actions` are reported as failed/incomplete work even when
+the CLI returns `SUCCESS`, exits zero, or produces a partial answer.
+
 ## State and locks
 
 Default state is `~/.local/state/dual-agent`, honoring `XDG_STATE_HOME`, or the complete `DUAL_AGENT_STATE_DIR` override. Use a local directory shared by all registrations. Each job stores `job.json`, `result.md`, `stdout.log`, and `stderr.log`; cancellation requests and Codex's final-message staging file are internal job files.

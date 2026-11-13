@@ -18,6 +18,15 @@ defaults to `edit`. Explicitly choose `mode: "edit"` for a custom editing task.
 Do not edit the same workspace while a delegated implementation owns its lock.
 Skip delegation for trivial changes or when the user asks to work without it.
 
+Before launching a review, save the complete parent and backend/submodule diffs
+and required external notes inside the allowed worktree, for example under
+`tmp/agy-review/`. Record the compared commits and include staged, unstaged, and
+new files. A parent gitlink does not include the child repository's changes.
+Copy the content itself; symlinks to external Git metadata or `/tmp` notes remain
+outside the sandbox. Pass the saved paths as context and tell AGY to review the
+saved diff plus current source without requiring external Git metadata. Keep
+read-only mode and existing permissions. Report any missing context as a limit.
+
 Read-only jobs can run tests and experiments in an isolated writable scratch
 directory while project files remain read-only. Temporary files and common test
 caches are redirected there. Keep `mode: "read-only"` for reviews that execute

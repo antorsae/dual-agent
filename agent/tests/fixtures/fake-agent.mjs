@@ -38,7 +38,11 @@ if (input.includes("[hold]")) {
       emit({ type: "thread.started", thread_id: "fixture-codex-session" });
     } else if (provider === "agy") {
       if (input.includes("[denied]")) emit({ event: "step_update", step_update: { tool_info: { error: { type: "PERMISSION_DENIED", message: "tool denied" } } } });
-      if (!input.includes("[no-result]")) emit({ event: "result", result: { conversation_id: "fixture-agy-session", status: input.includes("[is-error]") ? "ERROR" : "SUCCESS", response: output } });
+      if (!input.includes("[no-result]")) emit({ event: "result", result: {
+        conversation_id: "fixture-agy-session", status: input.includes("[is-error]") ? "ERROR" : "SUCCESS",
+        response: input.includes("[denied-actions-empty]") ? "" : output,
+        ...(input.includes("[denied-actions") ? { denied_actions: [{ action: "read_file", display_name: "ReadFile" }] } : {}),
+      } });
     } else {
       const line = Buffer.from(input.includes("[bad-json]") ? "invalid json\n" : JSON.stringify({
         type: "result", result: output, session_id: "fixture-claude-session", is_error: input.includes("[is-error]"),

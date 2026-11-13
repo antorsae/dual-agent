@@ -94,7 +94,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
 
   let sessionId: string | undefined;
   let claudeResult: { result?: unknown; session_id?: unknown; is_error?: unknown; permission_denials?: unknown } | undefined;
-  let agyResult: { response?: unknown; conversation_id?: unknown; status?: unknown; error?: unknown } | undefined;
+  let agyResult: { response?: unknown; conversation_id?: unknown; status?: unknown; error?: unknown; denied_actions?: unknown } | undefined;
   let agyDenied = false;
   let pendingLine = "";
   const decoder = new StringDecoder("utf8");
@@ -148,6 +148,12 @@ export async function runProvider(job: Job, store: JobStore, options: {
         output = agyResult.response;
         if (typeof agyResult.conversation_id === "string") sessionId = agyResult.conversation_id;
         if (agyResult.status !== "SUCCESS" || agyResult.error) problem = new Error(`Antigravity ${agyResult.status ?? "unknown status"}: ${agyResult.error || "see stdout.log"}`);
+        else if (Array.isArray(agyResult.denied_actions) && agyResult.denied_actions.length) {
+          const actions = [...new Set(agyResult.denied_actions.map(action =>
+            typeof action?.action === "string" ? action.action : "unknown action"))].join(", ");
+          problem = new Error(`Antigravity denied tool actions: ${actions}. ` +
+            "Stage required external notes and parent/submodule diffs inside the allowed worktree, then review those snapshots plus source without external Git metadata. Keep read-only mode and existing permissions.");
+        }
         else if (agyDenied) problem = new Error("Antigravity reported a denied tool call; inspect the result for incomplete work.");
       } else if (isCodexProvider(job.provider)) {
         output = await readFile(store.file(job.id, "answer.tmp"), "utf8").catch(error => {

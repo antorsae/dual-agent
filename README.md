@@ -213,6 +213,13 @@ runs commands automatically inside that boundary; commands requiring approval
 are denied in headless mode and reported as incomplete work. Antigravity edits
 use native auto mode. Antigravity MCP calls are denied to prevent recursive handoffs.
 
+Before an Antigravity review, save complete parent and backend/submodule diffs
+and any required external notes inside the allowed worktree, such as
+`tmp/agy-review/`. Include new files and record the compared commits. Copy file
+contents rather than symlinks to external paths. Tell AGY to review these saved
+diffs plus current source without requiring external Git metadata or `/tmp` notes.
+Keep read-only mode and existing permissions.
+
 Scratch files are retained with job results under `jobs/<uuid>/scratch` and exposed
 as `paths.scratch` in the tool response. Keep `DUAL_AGENT_STATE_DIR` outside the
 workspace; read-only Codex jobs reject a state directory inside it.

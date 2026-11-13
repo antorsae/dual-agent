@@ -48,6 +48,9 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const scratchGuidance = isCodexProvider(provider) || provider === "agy"
     ? " Read-only jobs may run tests using an isolated writable scratch directory; project files remain read-only. Temporary files and common caches are redirected there. Keep mode read-only for reviews that run tests."
     : "";
+  const contextGuidance = provider === "agy"
+    ? " Before review, save required external notes and complete parent/submodule diffs inside the allowed worktree. Include new files. Tell the worker to review saved diffs plus source without external Git metadata or /tmp paths; keep read-only mode and existing permissions."
+    : "";
   const enableChannel = options.enableChannel ?? provider !== "claude";
   const channelSource = options.channelSource ?? serverName;
   const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
@@ -71,7 +74,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   await manager.store.init();
   const common = {
     cwd: { type: "string", description: "Optional absolute project directory. Defaults to CLAUDE_PROJECT_DIR, then the directory where the host launched this server. Pass explicitly to target another project. The resolved path is returned with the job." },
-    files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." },
+    files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." + contextGuidance },
     mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." + scratchGuidance },
     wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
     timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: `Hard limit in milliseconds (default two hours) that kills the worker and discards its answer. Leave unset unless the user asks for a limit; reviews can take from minutes to over an hour. Bound your own waiting with ${prefix}_status wait_ms instead.` },
@@ -84,7 +87,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   ];
   const tools = kinds.map(([suffix, type, description]) => ({
     name: prefix + suffix,
-    description: description + (type !== "implement" ? scratchGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
+    description: description + (type !== "implement" ? scratchGuidance + contextGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
     inputSchema: {
       type: "object" as const, additionalProperties: false,
       properties: { [type === "plan-review" ? "plan" : "prompt"]: { type: "string", description: "Complete task instructions, requirements, and constraints for this call." }, ...common },

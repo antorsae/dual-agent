@@ -66,7 +66,8 @@ export function buildPrompt(task: Pick<Job, "type" | "prompt" | "files" | "mode"
   const files = task.files?.length ? `\n\n## Files\n\n${task.files.map(file => `- ${file}`).join("\n")}\n\nRead these files as context.` : "";
   return `# Task: ${task.type.toUpperCase()}\n\n${instructions[task.type]}\n\n` +
     `Complete this task yourself. Do not delegate, use subagents, schedule work, or start another agent session.\n` +
-    (task.provider === "agy" ? `The user's project is ${JSON.stringify(task.cwd)}. Resolve relative file paths against it. Read its project instructions (AGENTS.md, CLAUDE.md, or GEMINI.md) when present.\n` : "") +
+    (task.provider === "agy" ? `The user's project is ${JSON.stringify(task.cwd)}. Resolve relative file paths against it. Read its project instructions (AGENTS.md, CLAUDE.md, or GEMINI.md) when present.\n` +
+      "For linked worktrees and submodules, Git metadata may be outside the allowed workspace. Review the supplied saved diffs and notes plus current source; do not require external Git metadata or /tmp notes. If required context is missing, report that limit without changing permissions.\n" : "") +
     (task.mode === "read-only" ? "This is a read-only task: do not modify project files.\n" : "Edit only what this task requires.\n") +
     (task.scratch ? `You may run tests and experiments in the writable scratch directory: ${JSON.stringify(task.scratch)}.\n` +
       "The original workspace remains read-only. Write test outputs in scratch. Temporary files, common caches, Python bytecode, pytest cache, and coverage data are redirected there. " +
