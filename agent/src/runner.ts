@@ -7,6 +7,7 @@ import { promisify } from "node:util";
 import { isCodexProvider, Job, buildPrompt, ProcessIdentity, providerLabel } from "./tasks.js";
 import { JobStore, processIdentity } from "./jobStore.js";
 import { readOnlyCodexArgs, scratchEnvironment } from "./scratch.js";
+import { agyArgs, agyInput } from "./agy.js";
 
 const execFileAsync = promisify(execFile);
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -19,6 +20,7 @@ export interface RunResult {
 }
 
 export function commandFor(job: Job, store: JobStore): { command: string; args: string[] } {
+  if (job.provider === "agy") return { command: process.env.AGY_BIN || "agy", args: agyArgs(job) };
   if (isCodexProvider(job.provider)) {
     const profile = job.provider === "rosalind" ? "rosalind_delegate" : job.provider === "gemini" ? "gemini" : undefined;
     return {
@@ -33,7 +35,8 @@ export function commandFor(job: Job, store: JobStore): { command: string; args: 
         "-c", 'mcp_servers.claude-delegate={command="node",args=[],enabled=false}',
         "-c", 'mcp_servers.codex-delegate={command="node",args=[],enabled=false}',
         "-c", 'mcp_servers.rosalind-delegate={command="node",args=[],enabled=false}',
-        "-c", 'mcp_servers.gemini-delegate={command="node",args=[],enabled=false}', "-"],
+        "-c", 'mcp_servers.gemini-delegate={command="node",args=[],enabled=false}',
+        "-c", 'mcp_servers.agy-delegate={command="node",args=[],enabled=false}', "-"],
     };
   }
   return {
@@ -70,7 +73,8 @@ export async function runProvider(job: Job, store: JobStore, options: {
 }): Promise<RunResult> {
   const { command, args } = commandFor(job, store);
   const proc = spawn(command, args, {
-    cwd: job.cwd, detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
+    cwd: job.provider === "agy" && job.scratch ? job.scratch : job.cwd,
+    detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
     env: { ...process.env, FORCE_COLOR: "0", ...(job.scratch ? scratchEnvironment(job.scratch) : {}) },
   });
   let problem: Error | undefined;
@@ -90,12 +94,19 @@ export async function runProvider(job: Job, store: JobStore, options: {
 
   let sessionId: string | undefined;
   let claudeResult: { result?: unknown; session_id?: unknown; is_error?: unknown; permission_denials?: unknown } | undefined;
+  let agyResult: { response?: unknown; conversation_id?: unknown; status?: unknown; error?: unknown } | undefined;
+  let agyDenied = false;
   let pendingLine = "";
   const decoder = new StringDecoder("utf8");
   const parseLine = (line: string) => {
     try {
       const event = JSON.parse(line);
-      if (isCodexProvider(job.provider)) {
+      if (job.provider === "agy") {
+        if (event.event === "init" && typeof event.conversation_id === "string") sessionId = event.conversation_id;
+        if (event.event === "result") agyResult = event.result;
+        const error = event.step_update?.tool_info?.error;
+        if (error && /permission|denied|approval/i.test(JSON.stringify(error))) agyDenied = true;
+      } else if (isCodexProvider(job.provider)) {
         if (event.type === "thread.started" && typeof event.thread_id === "string") sessionId = event.thread_id;
       } else if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
         sessionId = event.session_id;
@@ -118,7 +129,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
     await new Promise<void>((resolve, reject) => { proc.once("spawn", resolve); proc.once("error", reject); });
     await options.onSpawn(await processIdentity(proc.pid!));
     if (options.signal.aborted) await stop();
-    else proc.stdin.end(buildPrompt(job));
+    else proc.stdin.end(job.provider === "agy" ? agyInput(buildPrompt(job)) : buildPrompt(job));
   } catch (error) {
     problem = error instanceof Error ? error : new Error(String(error));
     await stop();
@@ -132,7 +143,13 @@ export async function runProvider(job: Job, store: JobStore, options: {
   let output = "";
   if (!problem) {
     try {
-      if (isCodexProvider(job.provider)) {
+      if (job.provider === "agy") {
+        if (!agyResult || typeof agyResult.response !== "string") throw new Error("Antigravity returned no JSON result; see stdout.log and stderr.log.");
+        output = agyResult.response;
+        if (typeof agyResult.conversation_id === "string") sessionId = agyResult.conversation_id;
+        if (agyResult.status !== "SUCCESS" || agyResult.error) problem = new Error(`Antigravity ${agyResult.status ?? "unknown status"}: ${agyResult.error || "see stdout.log"}`);
+        else if (agyDenied) problem = new Error("Antigravity reported a denied tool call; inspect the result for incomplete work.");
+      } else if (isCodexProvider(job.provider)) {
         output = await readFile(store.file(job.id, "answer.tmp"), "utf8").catch(error => {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
           throw error;

@@ -4,20 +4,23 @@ import { spawn, spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
-const provider = args.includes("--print") ? "claude" : "codex";
+const provider = args.includes("--input-format") ? "agy" : args.includes("--print") ? "claude" : "codex";
+const wireInput = input;
+if (provider === "agy") input = JSON.parse(input).message.content;
 if (provider === "codex" && process.env.FAKE_CHECK_GIT_REPO === "1" &&
     !args.includes("--skip-git-repo-check") &&
     spawnSync("git", ["rev-parse", "--show-toplevel"], { stdio: "ignore" }).status !== 0) {
   process.stderr.write("Not inside a trusted directory and --skip-git-repo-check was not specified.\n");
   process.exit(1);
 }
-const capture = { args, input, cwd: process.cwd(), provider, pid: process.pid,
+const capture = { args, input, wireInput, cwd: process.cwd(), provider, pid: process.pid,
   env: Object.fromEntries(["DUAL_AGENT_SCRATCH_DIR", "TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME", "PYTHONPYCACHEPREFIX", "PYTEST_ADDOPTS", "COVERAGE_FILE", "npm_config_cache"].map(key => [key, process.env[key]])) };
 if (process.env.FAKE_CAPTURE) appendFileSync(process.env.FAKE_CAPTURE, JSON.stringify(capture) + "\n");
 if (process.env.DUAL_AGENT_CAPTURE) writeFileSync(process.env.DUAL_AGENT_CAPTURE, JSON.stringify(capture));
 process.stderr.write("fixture diagnostic\n");
 const emit = event => process.stdout.write(JSON.stringify(event) + "\n");
 if (provider === "claude") emit({ type: "system", subtype: "init", session_id: "fixture-claude-session" });
+if (provider === "agy") emit({ event: "init", conversation_id: "fixture-agy-session", init: { model: args[args.indexOf("--model") + 1] } });
 if (input.includes("[tree]")) {
   const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "inherit" });
   if (process.env.FAKE_DESCENDANTS) appendFileSync(process.env.FAKE_DESCENDANTS, String(child.pid) + "\n");
@@ -33,6 +36,9 @@ if (input.includes("[hold]")) {
     if (provider === "codex") {
       if (!input.includes("[no-result]")) writeFileSync(args[args.indexOf("--output-last-message") + 1], output);
       emit({ type: "thread.started", thread_id: "fixture-codex-session" });
+    } else if (provider === "agy") {
+      if (input.includes("[denied]")) emit({ event: "step_update", step_update: { tool_info: { error: { type: "PERMISSION_DENIED", message: "tool denied" } } } });
+      if (!input.includes("[no-result]")) emit({ event: "result", result: { conversation_id: "fixture-agy-session", status: input.includes("[is-error]") ? "ERROR" : "SUCCESS", response: output } });
     } else {
       const line = Buffer.from(input.includes("[bad-json]") ? "invalid json\n" : JSON.stringify({
         type: "result", result: output, session_id: "fixture-claude-session", is_error: input.includes("[is-error]"),

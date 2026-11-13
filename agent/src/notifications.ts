@@ -1,5 +1,5 @@
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { isCodexProvider, isFinished, providerLabel, type Job } from "./tasks.js";
+import { isFinished, providerLabel, type Job } from "./tasks.js";
 
 export function formatDuration(ms: number): string {
   const seconds = Math.floor(ms / 1000);
@@ -9,13 +9,13 @@ export function formatDuration(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-// Claude Code consumes these events from Codex-backed delegation servers. The
+// Claude Code consumes these events from its delegation servers. The
 // reverse Claude server is hosted by Codex, which does not use this protocol.
 export async function notifyChannel(server: Pick<Server, "notification">, job: Job, options: {
   source: string;
   toolPrefix: string;
 } = { source: `${job.provider}-delegate`, toolPrefix: `delegate_${job.provider}` }): Promise<void> {
-  if (!isCodexProvider(job.provider) || !isFinished(job)) return;
+  if (job.provider === "claude" || !isFinished(job)) return;
   const duration = formatDuration((job.endedAt ? Date.parse(job.endedAt) : Date.now()) - Date.parse(job.createdAt));
   try {
     await server.notification({

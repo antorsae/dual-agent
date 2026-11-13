@@ -1,6 +1,6 @@
 # Delegation servers and CLI
 
-`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. `rosalindMcp.ts` and `geminiMcp.ts` expose Codex profiles to Claude Code, with `rosalindCodexMcp.ts` and `geminiCodexMcp.ts` for Codex hosts. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
+`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. `rosalindMcp.ts` exposes a Codex profile and `agyMcp.ts` exposes native Antigravity to Claude Code, with `rosalindCodexMcp.ts` and `agyCodexMcp.ts` for Codex hosts. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
 
 ## Build and registration
 
@@ -12,8 +12,7 @@ npm run build
 Run the repository's `./setup-dual-agent.sh` to choose integrations interactively.
 Choice 1 installs Codex delegation for Claude Code; choice 2 installs Claude
 delegation for Codex; choice 3 installs Rosalind delegation for both hosts;
-choice 4 installs Codex delegation for Codex; choice 5 installs Gemini delegation
-for both hosts using `codex -p gemini`.
+choice 4 installs Codex delegation for Codex; choice 5 installs native Antigravity for both hosts and asks which available model to use.
 Each includes the MCP registration and companion host skill. Select the choices
 you need, or use `--both` for the two original directions. For manual
 registration, use the same absolute state directory in all commands:
@@ -41,17 +40,17 @@ codex mcp add rosalind-delegate \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/rosalindCodexMcp.js
 
-claude mcp add --scope user gemini-delegate \
-  --env CODEX_BIN=codex \
-  --env CODEX_HOME=/absolute/path/to/codex-home \
+claude mcp add --scope user agy-delegate \
+  --env AGY_BIN=/absolute/path/to/agy \
+  --env AGY_MODEL=MODEL_ID \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
-  -- node /FULL/PATH/TO/agent/dist/geminiMcp.js
+  -- node /FULL/PATH/TO/agent/dist/agyMcp.js
 
-codex mcp add gemini-delegate \
-  --env CODEX_BIN=codex \
-  --env CODEX_HOME=/absolute/path/to/codex-home \
+codex mcp add agy-delegate \
+  --env AGY_BIN=/absolute/path/to/agy \
+  --env AGY_MODEL=MODEL_ID \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
-  -- node /FULL/PATH/TO/agent/dist/geminiCodexMcp.js
+  -- node /FULL/PATH/TO/agent/dist/agyCodexMcp.js
 
 codex mcp add codex-delegate \
   --env CODEX_BIN=codex-pool \
@@ -62,13 +61,12 @@ codex mcp add codex-delegate \
 
 Codex gives MCP servers only a minimal environment. If a Codex model provider
 reads its API key from a variable (`env_key`), add `env_vars = ["THAT_VARIABLE"]`
-under the relevant `[mcp_servers.codex-delegate]`, `[mcp_servers.rosalind-delegate]`,
-or `[mcp_servers.gemini-delegate]` table in
-Codex's `config.toml`. `codex mcp add` has no option for this; setup adds it.
+under the relevant `[mcp_servers.codex-delegate]` or `[mcp_servers.rosalind-delegate]`
+table in Codex's `config.toml`. `codex mcp add` has no option for this; setup adds it.
 
 Restart the hosts to discover the tools. `npm run mcp`, `npm run codex-codex-mcp`,
 `npm run claude-mcp`, `npm run rosalind-mcp`, `npm run rosalind-codex-mcp`,
-`npm run gemini-mcp`, and `npm run gemini-codex-mcp`
+`npm run agy-mcp`, and `npm run agy-codex-mcp`
 are the corresponding stdio entrypoints. Setup also persists `CODEX_HOME` for
 the Codex worker, and `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_EFFORT_LEVEL` for the
 Claude worker when configured; a saved effort is kept when setup reruns without it.
@@ -77,21 +75,21 @@ Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 `~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile
 and sends one live request through it by default.
 
-Gemini requires `$CODEX_HOME/gemini.config.toml` (default:
-`~/.codex/gemini.config.toml`). `./setup-dual-agent.sh --gemini-mcp` checks for
-this existing profile and installs both registrations and skills. The worker
-selects `-p gemini`; its model and authentication come from that profile.
-Installation preserves the profile and sends one live request through it by default.
+Antigravity uses the native `agy` executable and an explicit model ID from
+`agy models`. Setup prompts for the model and persists `AGY_MODEL` and `AGY_BIN`
+in both host registrations. Use `--agy-model MODEL_ID` or `AGY_MODEL` for
+unattended installation; reruns can reuse the saved registration value.
+The Codex host forwards `GEMINI_API_KEY` when present for native API-key setups;
+normal Google sign-in uses Antigravity's cached credentials.
 
-Both profile checks require a successful command and the expected response marker
-before building or replacing any registrations. Use `--skip-profile-checks` to
-skip both live checks, or `--skip-rosalind-profile-check` /
-`--skip-gemini-profile-check` to skip just one. The profile files remain required.
-These flags can accompany installation options or the interactive menu.
+Rosalind and Antigravity perform live checks by default. `--skip-profile-checks`
+skips both; `--skip-rosalind-profile-check` and `--skip-agy-check` skip one.
+Installing Antigravity removes legacy Gemini registrations and skills only after
+the new registrations succeed. Its status/list tools can still read legacy jobs.
 
 ## Tool contract
 
-The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `delegate_gemini`:
+The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `delegate_agy`:
 
 | Suffix | Inputs |
 |--------|--------|
@@ -103,7 +101,7 @@ The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `dele
 | `_list` | optional `limit` from 1 to 100 (default 20) |
 | `_cancel` | `task_id` |
 
-Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. For Codex, Rosalind, and Gemini, read-only preserves the workspace while allowing tests and experiments in per-job scratch. Unknown arguments and invalid values are errors before execution.
+Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. For Codex, Rosalind, and Antigravity, read-only preserves the workspace while allowing tests and experiments in per-job scratch. Unknown arguments and invalid values are errors before execution.
 
 The project directory is resolved from explicit `cwd`, then `CLAUDE_PROJECT_DIR`,
 then the MCP server's inherited working directory. Stdio hosts normally launch
@@ -128,7 +126,7 @@ claude --dangerously-load-development-channels server:codex-delegate
 ```
 
 Use `server:rosalind-delegate` for Rosalind's completion channel or
-`server:gemini-delegate` for Gemini's.
+`server:agy-delegate` for Antigravity's.
 
 Accept the local-development confirmation at startup. The development flag is
 ignored with `-p` or the Agent SDK. Channels require claude.ai or Console API-key
@@ -143,8 +141,8 @@ enabled or received its channel events. The reverse `claude-delegate` server and
 the Codex-hosted `codex-delegate` registration use status waits; they do not
 advertise Claude's channel capability to Codex.
 
-The Claude-hosted `rosalind-delegate` and `gemini-delegate` servers use the same
-channel behavior with `delegate_rosalind_status` and `delegate_gemini_status`.
+The Claude-hosted `rosalind-delegate` and `agy-delegate` servers use the same
+channel behavior with `delegate_rosalind_status` and `delegate_agy_status`.
 Their Codex-hosted registrations use bounded status
 waits and do not advertise the Claude channel capability.
 
@@ -159,7 +157,8 @@ collected through a waiting call does not need to be presented again.
 
 Prompts travel on stdin, avoiding shell interpolation and argument-size limits. Each task starts a fresh provider session; its returned session ID is retained as metadata. There is no automatic conversation resume or replay of interrupted edits.
 
-- Codex: `exec --skip-git-repo-check --json --output-last-message ...`. Read-only jobs use a unique named filesystem permission profile: read access to the filesystem, write access only to job scratch, network disabled, and `approval_policy=never`. `--strict-config` prevents unsupported profile configuration from being silently ignored. Editing uses `--approve-for-me`. Rosalind adds `-p rosalind_delegate`; Gemini adds `-p gemini`. Plain Codex jobs pass no model profile, so they use the default model configuration of the registered `CODEX_HOME`. All delegation MCP servers are disabled in the child invocation.
+- Codex: `exec --skip-git-repo-check --json --output-last-message ...`. Read-only jobs use a unique named filesystem permission profile: read access to the filesystem, write access only to job scratch, network disabled, and `approval_policy=never`. `--strict-config` prevents unsupported profile configuration from being silently ignored. Editing uses `--approve-for-me`. Rosalind adds `-p rosalind_delegate`. Plain Codex jobs pass no model profile, so they use the default model configuration of the registered `CODEX_HOME`. All delegation MCP servers are disabled in the child invocation.
+- Antigravity: native `agy --input-format stream-json --output-format stream-json --model ...`. The prompt is one JSON user event on stdin. Read-only jobs run from scratch with the original workspace allowed for reads and denied for writes, using `proceed-in-sandbox`. Editing uses native `auto` mode. Session-only permission settings deny MCP calls. Parse `init.conversation_id` and the final `result` envelope; non-success status and denied tool calls fail the job even if the CLI exits zero.
 - Claude: `--print --output-format stream-json --verbose`, strict empty MCP configuration, and disabled skills/Chrome. Read-only jobs expose `Read,Glob,Grep` with `dontAsk` and allow reads anywhere (`Read(//**)`), matching Codex's read-only sandbox; without that rule, `dontAsk` denies reads outside the project. Editing jobs expose file tools and Bash with automatic permission review. Calls that still require an unanswered permission are denied, and reported permission denials fail the job. Authentication and model configuration come from the installed Claude CLI.
 
 The host authorizes the project directory passed to the worker. Codex's separate
@@ -177,7 +176,7 @@ Read-only Codex jobs keep the original project as `cwd` and create
 The prompt tells the worker to redirect other generated files or copy the required
 inputs into scratch. Read-only reviews can run tests without selecting edit mode.
 Scratch files are retained with the job and returned as `paths.scratch` for inspection.
-Claude's read-only jobs keep their existing file-tool restriction.
+Antigravity uses the same cache variables but runs from scratch, with the original project path supplied in the prompt. Claude's read-only jobs keep their existing file-tool restriction.
 
 ## State and locks
 

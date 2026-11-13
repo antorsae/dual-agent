@@ -19,17 +19,17 @@ async function fixture(t, missingBinaries = []) {
   await writeFile(join(testHome, ".codex/rosalind_delegate.config.toml"), 'model = "fixture-rosalind"\n');
   await writeFile(join(testHome, ".codex/gemini.config.toml"), 'model = "fixture-gemini"\n');
   await mkdir(join(dir, "scripts"));
-  for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh", "scripts/integrations.sh"]) {
+  for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh", "scripts/integrations.sh", "scripts/agy-setup.sh"]) {
     const source = await readFile(new URL("../../" + script, import.meta.url), "utf8");
     // Redirect managed files without changing the process HOME.
     await writeFile(join(dir, script), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
   }
-  for (const [role, skill] of [[".claude", "codex-delegate"], [".codex", "claude-delegate"], [".codex", "codex-delegate"], [".claude", "rosalind-delegate"], [".codex", "rosalind-delegate"], [".claude", "gemini-delegate"], [".codex", "gemini-delegate"]]) {
+  for (const [role, skill] of [[".claude", "codex-delegate"], [".codex", "claude-delegate"], [".codex", "codex-delegate"], [".claude", "rosalind-delegate"], [".codex", "rosalind-delegate"], [".claude", "agy-delegate"], [".codex", "agy-delegate"]]) {
     const path = join(dir, role, "skills", skill);
     await mkdir(path, { recursive: true });
     await writeFile(join(path, "SKILL.md"), skill + " fixture");
   }
-  for (const entrypoint of ["mcp", "codexCodexMcp", "claudeMcp", "rosalindMcp", "rosalindCodexMcp", "geminiMcp", "geminiCodexMcp"]) {
+  for (const entrypoint of ["mcp", "codexCodexMcp", "claudeMcp", "rosalindMcp", "rosalindCodexMcp", "agyMcp", "agyCodexMcp"]) {
     await writeFile(join(dir, "agent", "dist", entrypoint + ".js"), "");
   }
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
@@ -50,6 +50,8 @@ async function fixture(t, missingBinaries = []) {
     'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args, codexHome: process.env.CODEX_HOME }) + "\\n");',
     'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
+    'if (args[0] === "models") { console.log("fixture-model\\tFixture Model\\nother-model\\tOther Model"); process.exit(0); }',
+    'if (args.some(arg => arg.startsWith("--print="))) { console.log(JSON.stringify({ status: "SUCCESS", response: process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? "DUAL_AGENT_PROFILE_OK" })); process.exit(0); }',
     'if (args.includes("exec")) { process.stdin.resume(); process.stdin.on("end", () => {',
     '  if (process.env.DUAL_AGENT_TEST_NO_PROFILE_ANSWER === "1") return;',
     '  const answer = process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? (args.includes("-p") ? "DUAL_AGENT_PROFILE_OK" : "custom executable");',
@@ -70,11 +72,12 @@ async function fixture(t, missingBinaries = []) {
     '}',
   ].join("\n");
   const customBinary = join(bin, "custom codex $'quoted");
-  for (const file of ["claude", "codex", "codex-pool", "npm", "custom codex $'quoted"]) {
+  for (const file of ["claude", "codex", "codex-pool", "agy", "npm", "custom codex $'quoted"]) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
-  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "GEMINI_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_TEST_NO_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE"]) delete env[key];
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "GEMINI_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_TEST_NO_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE", "AGY_BIN", "AGY_MODEL", "AGY_VERIFY_MODEL"]) delete env[key];
+  env.AGY_MODEL = "fixture-model";
   async function runScript(script, args, input, overrides, expectedStatus) {
     const result = spawnSync("bash", [join(dir, script), ...args], {
       cwd: dir, env: { ...env, ...overrides }, input, encoding: "utf8", timeout: 15000,
@@ -168,7 +171,7 @@ test("registers all delegation integrations from the component menu", async (t) 
   const { calls } = await f.run([], "12345c");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex", "rosalind-delegate").CODEX_HOME, join(f.testHome, ".codex"));
-  assert.equal(registrationEnv(calls, "codex", "gemini-delegate").CODEX_HOME, join(f.testHome, ".codex"));
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "fixture-model");
   assert.equal(registrationEnv(calls, "codex", "codex-delegate").CODEX_BIN, "codex-pool");
 });
 
@@ -305,7 +308,7 @@ test("select all includes Claude delegation with the other integrations", async 
   const f = await fixture(t);
   const { calls } = await f.run([], "ac");
   const codexServers = calls.filter(call => call.name === "codex" && call.args[1] === "add").map(call => call.args[2]);
-  assert.deepEqual(codexServers.sort(), ["claude-delegate", "codex-delegate", "gemini-delegate", "rosalind-delegate"]);
+  assert.deepEqual(codexServers.sort(), ["agy-delegate", "claude-delegate", "codex-delegate", "rosalind-delegate"]);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   await access(join(f.testHome, ".codex/skills/claude-delegate/SKILL.md"));
   await access(join(f.testHome, ".codex/skills/codex-delegate/SKILL.md"));
@@ -342,73 +345,6 @@ test("Rosalind setup fails before registration when its Codex profile is missing
   const { calls, output } = await f.run(["--rosalind-mcp"], "", {}, 1);
   assert.match(output, /Rosalind Codex profile not found/);
   assert.deepEqual(calls, []);
-});
-
-test("Gemini setup installs both hosts, forwards profile keys, and preserves the profile", async (t) => {
-  const f = await fixture(t);
-  const configDir = join(f.dir, "gemini config");
-  const state = join(f.dir, "shared gemini state");
-  await mkdir(configDir);
-  const profile = join(configDir, "gemini.config.toml");
-  const content = 'model = "gemini-4-carbon"\n[model_providers.gateway]\nenv_key = "GEMINI_TEST_KEY"\n';
-  await writeFile(profile, content);
-  const config = join(configDir, "config.toml");
-  await writeFile(config, '[model_providers.pool]\nenv_key = "POOL_API_KEY"\n');
-  const { calls } = await f.run(["--gemini-mcp"], "", { CODEX_HOME: configDir, CODEX_BIN: f.customBinary, DUAL_AGENT_STATE_DIR: state });
-  const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
-  assert.deepEqual(registrations.map(call => call.name), ["claude", "codex"]);
-  assert.ok(registrations.every(call => call.args.includes("gemini-delegate")));
-  for (const host of ["claude", "codex"]) {
-    assert.deepEqual(registrationEnv(calls, host, "gemini-delegate"), {
-      CODEX_BIN: f.customBinary, CODEX_HOME: configDir, DUAL_AGENT_STATE_DIR: state,
-    });
-  }
-  assert.ok(registrations[0].args.at(-1).endsWith("/geminiMcp.js"));
-  assert.ok(registrations[1].args.at(-1).endsWith("/geminiCodexMcp.js"));
-  assert.match(await readFile(config, "utf8"), /^\[mcp_servers\.gemini-delegate\]\nenv_vars = \["POOL_API_KEY", "GEMINI_TEST_KEY"\]$/m);
-  assert.equal(await readFile(join(f.testHome, ".claude/skills/gemini-delegate/SKILL.md"), "utf8"), "gemini-delegate fixture");
-  assert.equal(await readFile(join(configDir, "skills/gemini-delegate/SKILL.md"), "utf8"), "gemini-delegate fixture");
-  assert.equal(await readFile(profile, "utf8"), content);
-  const verification = calls.filter(call => call.args.includes("exec"));
-  assert.equal(verification.length, 1);
-  assert.equal(verification[0].name, "custom codex $'quoted");
-  assert.equal(verification[0].codexHome, configDir);
-  assert.equal(verification[0].args[verification[0].args.indexOf("-p") + 1], "gemini");
-
-  const installed = calls.length;
-  const { calls: removed } = await f.uninstall({ CODEX_HOME: configDir });
-  for (const host of ["claude", "codex"]) {
-    assert.ok(removed.slice(installed).some(call => call.name === host && call.args[1] === "remove" && call.args[2] === "gemini-delegate"));
-  }
-  await assert.rejects(access(join(f.testHome, ".claude/skills/gemini-delegate")), { code: "ENOENT" });
-  await assert.rejects(access(join(configDir, "skills/gemini-delegate")), { code: "ENOENT" });
-  assert.doesNotMatch(await readFile(config, "utf8"), /gemini-delegate/);
-  assert.equal(await readFile(profile, "utf8"), content);
-});
-
-test("Gemini setup requires its profile before building or registering", async (t) => {
-  const f = await fixture(t);
-  await rm(join(f.testHome, ".codex/gemini.config.toml"));
-  const { calls, output } = await f.run(["--gemini-mcp"], "", {}, 1);
-  assert.match(output, /Gemini Codex profile not found/);
-  assert.deepEqual(calls, []);
-});
-
-test("Gemini can be selected alone or cleared in the component menu", async (t) => {
-  const f = await fixture(t);
-  assert.deepEqual((await f.run([], "5nc")).calls, []);
-  assert.deepEqual((await f.run([], "55c")).calls, []);
-  const { calls } = await f.run([], "5c");
-  const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
-  assert.deepEqual(registrations.map(call => call.name), ["claude", "codex"]);
-  assert.ok(registrations.every(call => call.args.includes("gemini-delegate")));
-});
-
-test("--all includes Gemini delegation", async (t) => {
-  const f = await fixture(t);
-  const { calls } = await f.run(["--all"]);
-  assert.equal(registrationEnv(calls, "codex", "gemini-delegate").CODEX_BIN, "codex-pool");
-  assert.equal(registrationEnv(calls, "claude", "gemini-delegate").CODEX_BIN, "codex-pool");
 });
 
 test("Codex-from-Codex registers codex-delegate in Codex and forwards provider API keys", async (t) => {
@@ -478,11 +414,11 @@ test("uninstall removes Codex-hosted Codex delegation and its skill", async (t) 
 
 test("combined options and aliases install each requested integration once", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run(["--mcp", "--claude-mcp", "--gemini", "--gemini-mcp", "--both"]);
+  const { calls } = await f.run(["--mcp", "--claude-mcp", "--agy", "--agy-mcp", "--both"]);
   const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
   assert.deepEqual(registrations.map(call => [call.name, call.args.find(arg => arg.endsWith("-delegate"))]), [
     ["claude", "codex-delegate"], ["codex", "claude-delegate"],
-    ["claude", "gemini-delegate"], ["codex", "gemini-delegate"],
+    ["claude", "agy-delegate"], ["codex", "agy-delegate"],
   ]);
   assert.deepEqual(calls.filter(call => call.name === "npm").map(call => call.args), [["ci"], ["run", "build"]]);
 });
@@ -494,7 +430,7 @@ test("unknown trailing options fail before installation", async (t) => {
   assert.deepEqual(calls, []);
 });
 
-for (const artifact of ["agent/dist/geminiCodexMcp.js", ".codex/skills/gemini-delegate/SKILL.md"]) {
+for (const artifact of ["agent/dist/agyCodexMcp.js", ".codex/skills/agy-delegate/SKILL.md"]) {
   test(`missing ${artifact} prevents all registration changes`, async (t) => {
     const f = await fixture(t);
     await rm(join(f.dir, artifact));
@@ -528,7 +464,7 @@ for (const withTee of [true, false]) {
 }
 
 for (const [provider, label, profile, menuChoice] of [
-  ["rosalind", "Rosalind", "rosalind_delegate", "3"], ["gemini", "Gemini", "gemini", "5"],
+  ["rosalind", "Rosalind", "rosalind_delegate", "3"],
 ]) {
   test(`${label} verifies its profile by default for explicit and interactive setup`, async (t) => {
     const f = await fixture(t);
@@ -595,37 +531,94 @@ for (const [provider, label, profile, menuChoice] of [
   }
 }
 
-for (const [skip, expectedProfiles] of [
-  ["--skip-profile-checks", []],
-  ["--skip-rosalind-profile-check", ["gemini"]],
-  ["--skip-gemini-profile-check", ["rosalind_delegate"]],
-]) {
-  test(`${skip} skips only the requested checks in explicit and interactive setup`, async (t) => {
-    const f = await fixture(t);
-    let previousCalls = 0;
-    for (const [args, input] of [[[skip, "--rosalind-mcp", "--gemini-mcp"], ""], [[skip], "35c"]]) {
-      const { calls } = await f.run(args, input);
-      const recent = calls.slice(previousCalls);
-      previousCalls = calls.length;
-      assert.deepEqual(recent.filter(call => call.args.includes("exec")).map(call => call.args[call.args.indexOf("-p") + 1]), expectedProfiles);
-      assert.equal(recent.filter(call => call.args[1] === "add").length, 4);
-    }
-  });
-}
-
-test("--all verifies both profiles once before changing registrations", async (t) => {
-  const f = await fixture(t);
-  const { calls } = await f.run(["--all", "--gemini-mcp", "--verify-rosalind-profile"]);
-  const checks = calls.filter(call => call.args.includes("exec"));
-  assert.deepEqual(checks.map(call => call.args[call.args.indexOf("-p") + 1]), ["rosalind_delegate", "gemini"]);
-  assert.deepEqual(calls.slice(0, 2), checks);
-  assert.equal(calls.filter(call => call.args[1] === "add").length, 7);
-});
-
 test("ordinary Codex and Claude installation makes no profile requests", async (t) => {
   const f = await fixture(t);
   const { calls } = await f.run(["--both", "--codex-from-codex"]);
   assert.ok(!calls.some(call => call.args.includes("exec")));
+});
+
+test("Antigravity setup prompts for a native model and registers both hosts without a Codex worker", async t => {
+  const f = await fixture(t, ["codex-pool"]);
+  const { calls, output } = await f.run([], "5c2\n", { AGY_MODEL: "" });
+  assert.match(output, /Choose the Antigravity model/);
+  assert.match(output, /Other Model/);
+  for (const host of ["claude", "codex"]) {
+    const saved = registrationEnv(calls, host, "agy-delegate");
+    assert.equal(saved.AGY_MODEL, "other-model");
+    assert.equal(saved.AGY_BIN, join(f.dir, "bin/agy"));
+    assert.equal(saved.CODEX_BIN, undefined);
+    await access(join(f.testHome, `.${host}/skills/agy-delegate/SKILL.md`));
+  }
+  const check = calls.find(call => call.args.some(arg => arg.startsWith("--print=")));
+  assert.equal(check.name, "agy");
+  assert.equal(check.args[check.args.indexOf("--model") + 1], "other-model");
+  assert.ok(!calls.some(call => call.args.includes("exec")));
+  const config = await readFile(join(f.testHome, ".codex/config.toml"), "utf8");
+  assert.match(config, /env_vars = \["GEMINI_API_KEY"\]/);
+});
+
+test("Antigravity saves an explicit model and reuses it in unattended setup", async t => {
+  const f = await fixture(t);
+  const first = await f.run(["--agy-model", "other-model"], "", { AGY_BIN: f.customBinary });
+  assert.equal(registrationEnv(first.calls, "codex", "agy-delegate").AGY_BIN, f.customBinary);
+  const next = await f.run(["--agy-mcp", "--skip-agy-check"], "", { AGY_MODEL: "" });
+  const recent = next.calls.slice(first.calls.length);
+  assert.equal(registrationEnv(recent, "codex", "agy-delegate").AGY_MODEL, "other-model");
+  assert.ok(!recent.some(call => call.args.some(arg => arg.startsWith("--print="))));
+});
+
+test("Antigravity interactive default follows the current native model", async t => {
+  const f = await fixture(t);
+  const settings = join(f.testHome, ".gemini/antigravity-cli/settings.json");
+  await mkdir(join(settings, ".."), { recursive: true });
+  await writeFile(settings, '{"model":"Other Model"}');
+  const { calls } = await f.run([], "5c\n", { AGY_MODEL: "" });
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "other-model");
+  assert.equal(await readFile(settings, "utf8"), '{"model":"Other Model"}');
+});
+
+for (const [reason, overrides] of [
+  ["missing selection", { AGY_MODEL: "" }],
+  ["unavailable model", { AGY_MODEL: "not-in-catalog" }],
+  ["catalog failure", { DUAL_AGENT_TEST_FAIL_COMMAND: "agy" }],
+  ["live check failure", { DUAL_AGENT_TEST_PROFILE_ANSWER: "wrong answer" }],
+]) {
+  test(`Antigravity ${reason} fails before changing registrations`, async t => {
+    const f = await fixture(t);
+    const { calls } = await f.run(["--agy-mcp"], "", overrides, 1);
+    assert.ok(!calls.some(call => call.args[0] === "mcp"));
+  });
+}
+
+test("Antigravity rejects invalid menu choices and supports skipping checks interactively", async t => {
+  const f = await fixture(t);
+  const { calls, output } = await f.run(["--skip-profile-checks"], "5c999\n2\n", { AGY_MODEL: "" });
+  assert.match(output, /Choose a model number from the list/);
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "other-model");
+  assert.ok(!calls.some(call => call.args.some(arg => arg.startsWith("--print="))));
+});
+
+test("Antigravity migration removes old Gemini registrations and skills only after successful setup", async t => {
+  const f = await fixture(t);
+  for (const host of ["claude", "codex"]) {
+    const path = join(f.testHome, `.${host}/skills/gemini-delegate`);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, "SKILL.md"), "legacy skill");
+  }
+  const config = join(f.testHome, ".codex/config.toml");
+  const existing = '[mcp_servers.gemini-delegate]\ncommand = "old"\n';
+  await writeFile(config, existing);
+  const failed = await f.run(["--agy-mcp"], "", { DUAL_AGENT_TEST_FAIL_REGISTER: "codex" }, 1);
+  assert.ok(!failed.calls.some(call => call.args[1] === "remove" && call.args[2] === "gemini-delegate"));
+  assert.match(await readFile(config, "utf8"), /gemini-delegate/);
+  await access(join(f.testHome, ".codex/skills/gemini-delegate/SKILL.md"));
+  const completed = await f.run(["--gemini-mcp"]);
+  const recent = completed.calls.slice(failed.calls.length);
+  const lastAdd = recent.findLastIndex(call => call.args[1] === "add");
+  assert.ok(recent.findIndex(call => call.args[1] === "remove" && call.args[2] === "gemini-delegate") > lastAdd);
+  assert.doesNotMatch(await readFile(config, "utf8"), /gemini-delegate/);
+  for (const host of ["claude", "codex"]) await assert.rejects(access(join(f.testHome, `.${host}/skills/gemini-delegate`)), { code: "ENOENT" });
+  assert.equal(await readFile(join(f.testHome, ".codex/gemini.config.toml"), "utf8"), 'model = "fixture-gemini"\n');
 });
 
 test("uninstall fallback removes all catalog integrations and preserves unrelated settings and jobs", async (t) => {
@@ -633,7 +626,7 @@ test("uninstall fallback removes all catalog integrations and preserves unrelate
   await f.run(["--all"]);
   const servers = {
     "codex-delegate": { command: "node" }, "rosalind-delegate": { command: "node" },
-    "gemini-delegate": { command: "node" }, unrelated: { command: "keep-me" },
+    "agy-delegate": { command: "node" }, unrelated: { command: "keep-me" },
   };
   const config = join(f.testHome, ".claude.json");
   const settings = join(f.testHome, ".claude/settings.json");
@@ -649,7 +642,7 @@ test("uninstall fallback removes all catalog integrations and preserves unrelate
     assert.equal(await readFile(savedJob, "utf8"), "saved answer");
     assert.equal(await readFile(join(f.testHome, ".codex/gemini.config.toml"), "utf8"), 'model = "fixture-gemini"\n');
   }
-  for (const [host, providers] of [["claude", ["codex", "rosalind", "gemini"]], ["codex", ["claude", "codex", "rosalind", "gemini"]]]) {
+  for (const [host, providers] of [["claude", ["codex", "rosalind", "agy", "gemini"]], ["codex", ["claude", "codex", "rosalind", "agy", "gemini"]]]) {
     for (const provider of providers) await assert.rejects(access(join(f.testHome, `.${host}/skills/${provider}-delegate`)), { code: "ENOENT" });
   }
 });

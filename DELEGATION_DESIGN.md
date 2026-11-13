@@ -55,7 +55,7 @@ The caller authorizes the project directory. Codex workers pass
 The override is per invocation and does not update global project trust or
 translate permissions between Claude and Codex.
 
-Read-only Codex jobs (including Rosalind and Gemini) use a unique named permission
+Read-only Codex jobs (including Rosalind) use a unique named permission
 profile with filesystem read access and a single writable root: `jobs/<uuid>/scratch`.
 The canonical scratch path must be outside the workspace. Network access and
 approval escalation are disabled, and strict configuration parsing rejects
@@ -73,10 +73,18 @@ Provider settings and project instructions remain native to the installed CLIs. 
 
 ## Host discovery and prompts
 
-`codex-delegate` exposes Codex tools to Claude Code and, optionally, to Codex; `claude-delegate` exposes Claude tools to Codex. `rosalind-delegate` and `gemini-delegate` expose the same Codex-backed tools to both hosts while selecting the `rosalind_delegate` and `gemini` Codex profiles respectively. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
+`codex-delegate` exposes Codex tools to Claude Code and, optionally, to Codex; `claude-delegate` exposes Claude tools to Codex. `rosalind-delegate` selects the `rosalind_delegate` Codex profile. `agy-delegate` runs native Antigravity with the model selected during setup. Both expose the same tools to both hosts. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
 
-A plain Codex worker passes no profile, so it uses the default configuration rather than the calling session's profile. Codex starts stdio MCP servers with a minimal environment, so the Codex-hosted Codex, Rosalind, and Gemini registrations list provider API key variables in `env_vars`.
+A plain Codex worker passes no profile, so it uses the default configuration rather than the calling session's profile. Codex starts stdio MCP servers with a minimal environment, so the Codex-hosted Codex and Rosalind registrations list provider API key variables in `env_vars`.
 
 The installed host skills describe when an independent review is useful and how to gather a result. They guide proactive selection for substantial work while avoiding unnecessary delegation for trivial tasks. The host still decides whether to call a tool. Users do not maintain a fixed prompt or type a subprocess command.
 
 `.agent-collab` is retired. MCP carries requests/results, state files provide persistence, and `AGENTS.md`/`CLAUDE.md` provide project guidance.
+
+Native Antigravity uses one NDJSON input event and streamed `init`, `step_update`,
+and `result` events. Read-only jobs run in scratch: the original workspace gets
+read permission and an explicit write denial. Terminal commands use the native
+sandbox, with approval-required actions denied in headless mode. Edit jobs use
+native auto mode and the shared edit lock. Model IDs come from `agy models` and
+are persisted per registration and per job. Legacy Gemini jobs remain readable
+through the Antigravity management tools without rewriting their metadata.

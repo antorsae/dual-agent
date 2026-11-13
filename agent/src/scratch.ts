@@ -6,7 +6,7 @@ export async function createScratch(workspace: string, jobDirectory: string): Pr
   const parent = await realpath(jobDirectory);
   const fromWorkspace = relative(workspace, parent);
   if (!isAbsolute(fromWorkspace) && fromWorkspace !== ".." && !fromWorkspace.startsWith(`..${sep}`)) {
-    throw new Error("Read-only Codex jobs need DUAL_AGENT_STATE_DIR outside the workspace so scratch writes cannot modify project files.");
+    throw new Error("Read-only jobs need DUAL_AGENT_STATE_DIR outside the workspace so scratch writes cannot modify project files.");
   }
   const scratch = join(parent, "scratch");
   await mkdir(scratch, { mode: 0o700 });

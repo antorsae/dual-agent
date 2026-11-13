@@ -1,13 +1,13 @@
 ---
-name: gemini-delegate
-description: Use Gemini through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Gemini runs Codex with the gemini profile.
+name: agy-delegate
+description: Use Antigravity through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Antigravity runs natively through agy with the model selected during setup.
 ---
 
-# Delegate to Gemini
+# Delegate to Antigravity
 
-Use `delegate_gemini_review`, `delegate_gemini_plan_review`,
-`delegate_gemini_implement`, or `delegate_gemini` from the
-`gemini-delegate` MCP server.
+Use `delegate_agy_review`, `delegate_agy_plan_review`,
+`delegate_agy_implement`, or `delegate_agy` from the
+`agy-delegate` MCP server.
 Write the prompt for the current task, with requirements, relevant files, and
 acceptance criteria. Do not ask the user to supply a command or repeat context.
 
@@ -26,13 +26,13 @@ response exposes `paths.scratch`, retained with the job results.
 An independent review is useful after a complex implementation or when choosing
 between substantial approaches. Skip delegation for trivial changes or when the
 user asks to work without it. Use implementation delegation only for a bounded
-task; do not edit the same workspace while Gemini owns its edit lock.
+task; do not edit the same workspace while Antigravity owns its edit lock.
 
 The call returns a persistent task ID by default. Continue with
-`delegate_gemini_status` and `wait_ms: 30000` until the job finishes, doing
+`delegate_agy_status` and `wait_ms: 30000` until the job finishes, doing
 independent work between calls where possible. Do not leave the user with only
 "task started" unless they requested background work. Use
-`delegate_gemini_list` to recover a task ID and `delegate_gemini_cancel` when
+`delegate_agy_list` to recover a task ID and `delegate_agy_cancel` when
 the work should stop.
 Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
 and discards its answer, and reviews can take from minutes to over an hour.

@@ -1,6 +1,6 @@
 # Dual Agent Development Environment
 
-Let **Claude Code delegate to Codex**, **Codex delegate to Claude** or to a separate Codex worker, and either host delegate to **Rosalind** or **Gemini** through Codex profiles and MCP. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control.
+Let **Claude Code delegate to Codex**, **Codex delegate to Claude** or to a separate Codex worker, and either host delegate to **Rosalind** through a Codex profile or **Antigravity** through the native `agy` CLI. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control.
 
 ## Installation
 
@@ -18,13 +18,13 @@ Setup asks which integrations to install:
 | 2 | Use Claude from Codex — MCP tools and skill |
 | 3 | Use Rosalind (Codex profile) from Claude Code and Codex |
 | 4 | Use Codex from Codex — MCP tools and skill |
-| 5 | Use Gemini (Codex profile) from Claude Code and Codex |
+| 5 | Use Antigravity (`agy`) from Claude Code and Codex |
 
 Toggle the choices you want, then press `c` to install. Select **1 and 2** for
 both delegation directions. Choose 3 to install the Rosalind server in both hosts.
 Choose 4 to let Codex delegate to a separate Codex worker that uses your default
 Codex configuration, for example from a session started with another profile.
-Choose 5 to use Gemini through your existing `codex -p gemini` configuration.
+Choose 5 to use native Antigravity. Setup asks which model from `agy models` to use.
 Each delegation choice installs its MCP server registration and host skill.
 
 Restart Claude Code and Codex to discover the tools and their companion skills. You can describe the work normally:
@@ -34,7 +34,7 @@ Get an independent review of this authentication change.
 Have Claude critique the migration plan.
 Ask Codex to implement this bounded API change.
 Use Rosalind to get a second review under its separate Codex profile.
-Ask Gemini to review this implementation.
+Ask Antigravity to review this implementation.
 ```
 
 The MCP tools accept a different prompt on every call. The installed skills guide each host to use the other model for useful independent reviews and bounded tasks, then collect and check the result. Tool selection remains the host agent's decision; no fixed shell prompt or terminal pane is needed.
@@ -60,30 +60,30 @@ Rosalind setup requires the Codex profile file
 `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 `~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile.
 
-Gemini setup requires `$CODEX_HOME/gemini.config.toml` (default:
-`~/.codex/gemini.config.toml`), the profile used by `codex -p gemini`.
-It uses the model and authentication configured there, including Gemini 4 Carbon.
-Setup preserves this profile too. Install Gemini for both hosts with:
+Antigravity setup requires the native `agy` CLI. Sign in once with `agy`, then
+choose integration 5 or run `./setup-dual-agent.sh --agy-mcp` in a terminal.
+Setup lists the models returned by `agy models` and asks which one to use.
+It offers the saved delegation model, or your current native model, as the default.
+For unattended setup, choose a model ID explicitly:
 
 ```bash
-CODEX_BIN=codex ./setup-dual-agent.sh --gemini-mcp
+agy models
+./setup-dual-agent.sh --agy-model MODEL_ID
 ```
 
-For each selected Rosalind or Gemini integration, setup sends one live request
-through its Codex profile by default. The command must succeed and return the
-expected response marker before setup builds or changes any registrations.
-Use `--skip-profile-checks` to skip both live checks, or
-`--skip-rosalind-profile-check` / `--skip-gemini-profile-check` to skip one:
+`AGY_MODEL` and `AGY_BIN` can also select the model and executable. Setup stores
+both in the host registrations; unattended reruns retain the saved model.
+Unavailable model IDs fail setup instead of silently selecting another model.
 
-```bash
-./setup-dual-agent.sh --rosalind-mcp --gemini-mcp --skip-profile-checks
-```
+Selected Rosalind and Antigravity integrations each make one live request by
+default before setup changes registrations. Use `--skip-profile-checks` to skip
+both, `--skip-rosalind-profile-check` for Rosalind, or `--skip-agy-check` for
+Antigravity. Model discovery and validation still run when the live check is skipped.
 
-Skip flags also work with the interactive menu. Profile files are still required.
-`ROSALIND_VERIFY_PROFILE=0` and `GEMINI_VERIFY_PROFILE=0` also skip their respective
-checks. Explicit `--verify-rosalind-profile` / `--verify-gemini-profile` select the
-integration and enable its check; command-line flags override the environment,
-and the last check option for a profile wins.
+Installing `agy-delegate` replaces the old `gemini-delegate` registrations and
+skills after successful setup. Old Gemini results remain accessible through
+`delegate_agy_status` and `delegate_agy_list`; saved jobs and the old Codex profile
+are preserved. The former `--gemini-mcp` flag is an alias for `--agy-mcp`.
 
 ## MCP tools
 
@@ -97,27 +97,27 @@ and the last check option for a profile wins.
 | Recent jobs | `delegate_codex_list` | `delegate_claude_list` |
 | Cancellation | `delegate_codex_cancel` | `delegate_claude_cancel` |
 
-Rosalind and Gemini expose the same seven tools in both hosts:
+Rosalind and Antigravity expose the same seven tools in both hosts:
 
-| Task | Rosalind | Gemini |
+| Task | Rosalind | Antigravity |
 |------|------------------|------------|
-| Code review | `delegate_rosalind_review` | `delegate_gemini_review` |
-| Implementation | `delegate_rosalind_implement` | `delegate_gemini_implement` |
-| Plan review | `delegate_rosalind_plan_review` | `delegate_gemini_plan_review` |
-| Custom task | `delegate_rosalind` | `delegate_gemini` |
-| Status and result | `delegate_rosalind_status` | `delegate_gemini_status` |
-| Recent jobs | `delegate_rosalind_list` | `delegate_gemini_list` |
-| Cancellation | `delegate_rosalind_cancel` | `delegate_gemini_cancel` |
+| Code review | `delegate_rosalind_review` | `delegate_agy_review` |
+| Implementation | `delegate_rosalind_implement` | `delegate_agy_implement` |
+| Plan review | `delegate_rosalind_plan_review` | `delegate_agy_plan_review` |
+| Custom task | `delegate_rosalind` | `delegate_agy` |
+| Status and result | `delegate_rosalind_status` | `delegate_agy_status` |
+| Recent jobs | `delegate_rosalind_list` | `delegate_agy_list` |
+| Cancellation | `delegate_rosalind_cancel` | `delegate_agy_cancel` |
 
 Rosalind runs the selected `codex-pool` or `codex` executable with the
-`-p rosalind_delegate` profile. Gemini uses `-p gemini`.
+`-p rosalind_delegate` profile. Antigravity runs `agy` directly with the selected `--model`.
 
 Choice 4 adds the same `delegate_codex_*` tools to Codex. Plain Codex workers
 get no `-p` option, so they use the default configuration in the registered
 `CODEX_HOME`, whichever profile the calling session uses.
 
 Codex starts MCP servers with a minimal environment that drops provider API
-keys. For the Codex-hosted Codex, Rosalind, and Gemini servers, setup lists every
+keys. For the Codex-hosted Codex and Rosalind servers, setup lists every
 `env_key` from `config.toml` and the selected profile in the registration's
 `env_vars`, so Codex forwards those variables. Rerun setup after adding a
 provider that reads its key from a new variable.
@@ -132,7 +132,7 @@ with the job.
 
 Review, plan-review, and custom tasks default to **read-only**. Implementation defaults to **edit**. A custom editing task must explicitly select `mode: "edit"`.
 
-Codex, Rosalind, and Gemini can run tests in read-only mode. The workspace stays
+Codex, Rosalind, and Antigravity can run tests in read-only mode. The workspace stays
 read-only, while each job gets its own writable scratch directory outside the
 workspace. Temporary files, common caches, Python bytecode, pytest cache, and
 coverage output are redirected there. Tests with other output paths need those
@@ -163,7 +163,7 @@ For Rosalind completion events, use the corresponding server name:
 claude --dangerously-load-development-channels server:rosalind-delegate
 ```
 
-For Gemini, use `server:gemini-delegate` instead.
+For Antigravity, use `server:agy-delegate` instead.
 
 Claude can then do independent work and fetch the saved result when the event
 arrives. See [channel setup and requirements](agent/README.md#completion-notifications-channels).
@@ -207,6 +207,12 @@ permission review; unavailable permissions or denied tool calls produce a failed
 job with the available result for inspection. Claude's read-only mode is a tool
 restriction, not an additional operating-system sandbox around its startup hooks or extensions.
 
+Native Antigravity reviews run from scratch, with read access to the original
+workspace and an explicit deny rule for workspace writes. Its terminal sandbox
+runs commands automatically inside that boundary; commands requiring approval
+are denied in headless mode and reported as incomplete work. Antigravity edits
+use native auto mode. Antigravity MCP calls are denied to prevent recursive handoffs.
+
 Scratch files are retained with job results under `jobs/<uuid>/scratch` and exposed
 as `paths.scratch` in the tool response. Keep `DUAL_AGENT_STATE_DIR` outside the
 workspace; read-only Codex jobs reject a state directory inside it.
@@ -225,11 +231,11 @@ These explicit options skip the interactive questions:
 | `--codex-mcp` (or `--mcp`) | Codex delegation for Claude Code |
 | `--claude-mcp` | Claude delegation for Codex |
 | `--rosalind-mcp` | Rosalind delegation for Claude Code and Codex |
-| `--gemini-mcp` | Gemini delegation for Claude Code and Codex |
+| `--agy-mcp` | Native Antigravity delegation for Claude Code and Codex |
 | `--codex-from-codex` | Codex delegation for Codex |
 | `--all` | All delegation integrations |
 
-Options can be combined, for example `./setup-dual-agent.sh --claude-mcp --gemini-mcp`.
+Options can be combined, for example `./setup-dual-agent.sh --claude-mcp --agy-mcp`.
 Each selected integration is installed once, even when options overlap.
 
 Build and registration errors stop setup with the underlying diagnostic. Setup does not write project context or `.gitignore` files.
@@ -252,11 +258,11 @@ This CLI shares the delegation job store and edit locks. Its default timeout is 
 ```bash
 claude mcp get codex-delegate
 claude mcp get rosalind-delegate
-claude mcp get gemini-delegate
+claude mcp get agy-delegate
 codex mcp get claude-delegate
 codex mcp get codex-delegate
 codex mcp get rosalind-delegate
-codex mcp get gemini-delegate
+codex mcp get agy-delegate
 ```
 
 Claude's user-scope registration is managed in `~/.claude.json`; Codex's is in its config directory. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).

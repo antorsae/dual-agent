@@ -45,7 +45,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const serverName = options.serverName ?? `${provider}-delegate`;
   const prefix = options.toolPrefix ?? `delegate_${provider}`;
   const label = options.label ?? providerLabel(provider);
-  const scratchGuidance = isCodexProvider(provider)
+  const scratchGuidance = isCodexProvider(provider) || provider === "agy"
     ? " Read-only jobs may run tests using an isolated writable scratch directory; project files remain read-only. Temporary files and common caches are redirected there. Keep mode read-only for reviews that run tests."
     : "";
   const enableChannel = options.enableChannel ?? provider !== "claude";
@@ -125,6 +125,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     const text = [
       `**Task ID**: ${job.id}`, `**Status**: ${job.status.toUpperCase()}${cancelRequested && !isFinished(job) ? " (cancellation requested)" : ""}`,
       `**Provider / Type / Mode**: ${job.provider} / ${job.type} / ${job.mode}`, `**Project**: ${job.cwd}`, `**Workspace**: ${job.workspace}`,
+      ...(job.model ? [`**Model**: ${job.model}`] : []),
       `**Created**: ${job.createdAt}`, `**${isFinished(job) ? "Duration" : "Elapsed"}**: ${elapsed}`,
       `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr${activity}`,
       ...(job.sessionId ? [`**Session ID**: ${job.sessionId}`] : []), ...(job.error ? [`**Error**: ${job.error}`] : []),
@@ -135,7 +136,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ].join("\n");
     return {
       content: [{ type: "text" as const, text }],
-      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
+      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, model: job.model, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
       isError: job.status === "failed" || job.status === "interrupted",
     };
   }

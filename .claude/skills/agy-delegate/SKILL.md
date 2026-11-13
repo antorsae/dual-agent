@@ -1,13 +1,13 @@
 ---
-name: gemini-delegate
-description: Use Gemini through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Gemini runs Codex with the gemini profile.
+name: agy-delegate
+description: Use Antigravity through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Antigravity runs natively through agy with the model selected during setup.
 ---
 
-# Delegate to Gemini
+# Delegate to Antigravity
 
-Use `delegate_gemini_review`, `delegate_gemini_plan_review`,
-`delegate_gemini_implement`, or `delegate_gemini` from the
-`gemini-delegate` MCP server.
+Use `delegate_agy_review`, `delegate_agy_plan_review`,
+`delegate_agy_implement`, or `delegate_agy` from the
+`agy-delegate` MCP server.
 Write the prompt for the current request and pass relevant file paths. Omit
 `cwd` to use `CLAUDE_PROJECT_DIR` when set, otherwise the directory where the host
 launched the server. Pass an absolute `cwd` when targeting another project or if
@@ -24,17 +24,17 @@ caches are redirected there. Keep `mode: "read-only"` for reviews that execute
 tests; redirect other outputs or copy inputs into scratch when needed. The tool
 response exposes `paths.scratch`, retained with the job results.
 
-If this session explicitly enabled the `gemini-delegate` channel, do independent
+If this session explicitly enabled the `agy-delegate` channel, do independent
 work while waiting for its completion event. On a
-`<channel source="gemini-delegate" task_id="...">` event, call
-`delegate_gemini_status` with that task ID to collect the result. No channel reply
+`<channel source="agy-delegate" task_id="...">` event, call
+`delegate_agy_status` with that task ID to collect the result. No channel reply
 is needed; do not present a result twice if a waiting call already collected it.
 When channel delivery is unavailable or uncertain, continue with
-`delegate_gemini_status` and `wait_ms: 30000` until completion, doing independent
+`delegate_agy_status` and `wait_ms: 30000` until completion, doing independent
 work between calls where possible. Events are not replayed after a restart.
 
 A task ID or running status is not the completed answer. Use
-`delegate_gemini_list` to recover IDs and `delegate_gemini_cancel` to stop work.
+`delegate_agy_list` to recover IDs and `delegate_agy_cancel` to stop work.
 Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
 and discards its answer, and reviews can take from minutes to over an hour.
 Inspect the returned findings, changes, and tests before reporting completion.

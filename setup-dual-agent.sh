@@ -13,7 +13,8 @@ source "$SCRIPT_DIR/scripts/integrations.sh"
 VERBOSE="${DUAL_AGENT_VERBOSE:-0}"
 INSTALL_LOG="${DUAL_AGENT_INSTALL_LOG:-${TMPDIR:-/tmp}/dual-agent-setup-$$.log}"
 VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-1}"
-VERIFY_GEMINI_PROFILE="${GEMINI_VERIFY_PROFILE:-1}"
+VERIFY_AGY="${AGY_VERIFY_MODEL:-${GEMINI_VERIFY_PROFILE:-1}}"
+INTERACTIVE_INSTALL=0
 INSTALL_REQUESTED=0
 SELECTED=()
 for index in "${!INTEGRATIONS[@]}"; do SELECTED+=(0); done
@@ -109,28 +110,32 @@ show_help() {
     done
     echo "  --both                 Install the two original delegation directions"
     echo "  --all                  Install all delegation integrations"
-    echo "  --skip-profile-checks  Skip live Rosalind and Gemini checks"
+    echo "  --skip-profile-checks  Skip live Rosalind and Antigravity checks"
     echo "  --skip-rosalind-profile-check Skip only the live Rosalind check"
-    echo "  --skip-gemini-profile-check Skip only the live Gemini check"
+    echo "  --skip-agy-check        Skip the live Antigravity model check"
+    echo "  --agy-model MODEL       Select an agy model ID for unattended setup"
     echo "  --verify-rosalind-profile Select Rosalind and enable its live check"
-    echo "  --verify-gemini-profile Select Gemini and enable its live check"
-    echo "  --mcp, --rosalind, --gemini Alias their corresponding --*-mcp options"
+    echo "  --verify-agy            Select Antigravity and enable its live check"
+    echo "  --mcp, --rosalind, --agy  Alias their corresponding --*-mcp options"
     echo "Options may be combined. Each integration is installed once."
-    echo "Selected Rosalind and Gemini integrations each send one live request by default."
+    echo "Selected Rosalind and Antigravity integrations each send one live request by default."
 }
 
-for setup_arg in "$@"; do
+while [ "$#" -gt 0 ]; do
+    setup_arg="$1"
+    shift
     case "$setup_arg" in
         --all) select_all 1 ;;
         --both) select_option --codex-mcp; select_option --claude-mcp ;;
         --mcp) select_option --codex-mcp ;;
         --rosalind) select_option --rosalind-mcp ;;
-        --gemini) select_option --gemini-mcp ;;
-        --skip-profile-checks) VERIFY_ROSALIND_PROFILE=0; VERIFY_GEMINI_PROFILE=0 ;;
+        --agy|--gemini|--gemini-mcp) select_option --agy-mcp ;;
+        --agy-model) [ "$#" -gt 0 ] || fail "--agy-model requires a model ID."; AGY_MODEL="$1"; shift; select_option --agy-mcp ;;
+        --skip-profile-checks) VERIFY_ROSALIND_PROFILE=0; VERIFY_AGY=0 ;;
         --skip-rosalind-profile-check) VERIFY_ROSALIND_PROFILE=0 ;;
-        --skip-gemini-profile-check) VERIFY_GEMINI_PROFILE=0 ;;
+        --skip-agy-check|--skip-gemini-profile-check) VERIFY_AGY=0 ;;
         --verify-rosalind-profile) select_option --rosalind-mcp; VERIFY_ROSALIND_PROFILE=1 ;;
-        --verify-gemini-profile) select_option --gemini-mcp; VERIFY_GEMINI_PROFILE=1 ;;
+        --verify-agy|--verify-gemini-profile) select_option --agy-mcp; VERIFY_AGY=1 ;;
         --help|-h) show_help; exit 0 ;;
         *) select_option "$setup_arg" ;;
     esac
@@ -138,7 +143,8 @@ done
 
 echo -e "${BLUE}Dual Agent Environment Setup${NC}"
 if [ "$INSTALL_REQUESTED" -eq 0 ]; then
-    echo "Selected Rosalind and Gemini integrations each send one live request unless skipped."
+    INTERACTIVE_INSTALL=1
+    echo "Selected Rosalind and Antigravity integrations each send one live request unless skipped."
     while true; do
         echo "Select integrations (toggle a number, then continue):"
         for index in "${!INTEGRATIONS[@]}"; do
@@ -174,6 +180,7 @@ NEED_CLAUDE_HOST=0
 NEED_CODEX_HOST=0
 NEED_CLAUDE_WORKER=0
 NEED_CODEX_WORKER=0
+NEED_AGY_WORKER=0
 for index in "${!INTEGRATIONS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
     SELECTION_COUNT=$((SELECTION_COUNT + 1))
@@ -181,7 +188,11 @@ for index in "${!INTEGRATIONS[@]}"; do
     for host in $INTEGRATION_HOSTS; do
         case "$host" in claude) NEED_CLAUDE_HOST=1 ;; codex) NEED_CODEX_HOST=1 ;; esac
     done
-    if [ "$INTEGRATION_PROVIDER" = "claude" ]; then NEED_CLAUDE_WORKER=1; else NEED_CODEX_WORKER=1; fi
+    case "$INTEGRATION_PROVIDER" in
+        claude) NEED_CLAUDE_WORKER=1 ;;
+        agy) NEED_AGY_WORKER=1 ;;
+        *) NEED_CODEX_WORKER=1 ;;
+    esac
 done
 if [ "$SELECTION_COUNT" -eq 0 ]; then
     echo "Nothing selected. Exiting."
@@ -213,6 +224,11 @@ if [ "$NEED_CLAUDE_WORKER" -eq 1 ]; then
     if command -v "$DELEGATE_CLAUDE_BIN" >/dev/null; then
         DELEGATE_CLAUDE_BIN="$(command -v "$DELEGATE_CLAUDE_BIN")"
     fi
+fi
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then
+    DELEGATE_AGY_BIN="${AGY_BIN:-agy}"
+    check_install "$DELEGATE_AGY_BIN" "Install and authenticate Antigravity CLI, or set AGY_BIN" || MISSING=1
+    if command -v "$DELEGATE_AGY_BIN" >/dev/null; then DELEGATE_AGY_BIN="$(command -v "$DELEGATE_AGY_BIN")"; fi
 fi
 [ "$MISSING" -eq 0 ] || fail "Install the missing dependencies and run setup again."
 
@@ -253,7 +269,6 @@ for index in "${!INTEGRATIONS[@]}"; do
     verify_profile=1
     case "$INTEGRATION_PROVIDER" in
         rosalind) verify_profile="$VERIFY_ROSALIND_PROFILE" ;;
-        gemini) verify_profile="$VERIFY_GEMINI_PROFILE" ;;
     esac
     case "$verify_profile" in
         0) echo "  Live $INTEGRATION_LABEL profile check: skipped" ;;
@@ -337,6 +352,8 @@ register_integration() {
         server_env+=(--env "CLAUDE_BIN=$DELEGATE_CLAUDE_BIN")
         if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then server_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"); fi
         if [ -n "$CLAUDE_WORKER_EFFORT" ]; then server_env+=(--env "CLAUDE_CODE_EFFORT_LEVEL=$CLAUDE_WORKER_EFFORT"); fi
+    elif [ "$provider" = "agy" ]; then
+        server_env+=(--env "AGY_BIN=$DELEGATE_AGY_BIN" --env "AGY_MODEL=$DELEGATE_AGY_MODEL")
     else
         server_env+=(--env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
     fi
@@ -350,7 +367,9 @@ register_integration() {
         run_logged codex mcp remove "$server" || true
         run_step "$server → Codex" codex mcp add "$server" "${server_env[@]}" -- node "$entrypoint" ||
             fail "Could not register $server for Codex. Fix the Codex CLI error above and rerun setup."
-        if [ "$provider" != "claude" ]; then
+        if [ "$provider" = "agy" ]; then
+            run_step "$server API key forwarding" add_codex_env_vars "$server" GEMINI_API_KEY || fail "Could not configure Antigravity key forwarding."
+        elif [ "$provider" != "claude" ]; then
             local -a key_sources=("$DELEGATE_CODEX_HOME/config.toml")
             if [ -n "$profile" ]; then key_sources+=("$DELEGATE_CODEX_HOME/$profile.config.toml"); fi
             forward_codex_keys "$server" "${key_sources[@]}"
@@ -359,6 +378,16 @@ register_integration() {
     run_step "$server $host skill" install_skill "$SCRIPT_DIR/.$host/skills/$server" "$destination" ||
         fail "Could not install the $host $server skill."
 }
+
+source "$SCRIPT_DIR/scripts/agy-setup.sh"
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then
+    select_agy_model
+    case "$VERIFY_AGY" in
+        0) echo "  Live Antigravity model check: skipped" ;;
+        1) run_step "Live Antigravity model check (one request)" verify_agy_model || fail "Antigravity model check failed. Fix authentication/model selection or use --skip-agy-check." ;;
+        *) fail "AGY_VERIFY_MODEL must be 0 or 1." ;;
+    esac
+fi
 
 echo -e "${BLUE}[2/4]${NC} Building agent package"
 [ -d "$AGENT_DIR" ] || fail "Agent package not found: $AGENT_DIR"
@@ -391,6 +420,12 @@ for index in "${!INTEGRATIONS[@]}"; do
     done
 done
 
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then
+    run_logged claude mcp remove gemini-delegate --scope user || true
+    run_logged codex mcp remove gemini-delegate || true
+    rm -rf "$HOME/.claude/skills/gemini-delegate" "$DELEGATE_CODEX_HOME/skills/gemini-delegate"
+fi
+
 echo -e "${BLUE}[4/4]${NC} Finalizing"
 echo -e "${GREEN}Setup Complete!${NC}"
 for index in "${!INTEGRATIONS[@]}"; do
@@ -404,3 +439,4 @@ for index in "${!INTEGRATIONS[@]}"; do
     for host in $INTEGRATION_HOSTS; do echo "Check registration: $host mcp get $INTEGRATION_PROVIDER-delegate"; done
 done
 if [ -n "$CLAUDE_WORKER_EFFORT" ]; then echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"; fi
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then echo "Antigravity model: $DELEGATE_AGY_MODEL"; fi

@@ -29,7 +29,7 @@ async function fixture(t) {
   await writeFile(descendants, "");
   await writeFile(binary, await readFile(new URL("./fixtures/fake-agent.mjs", import.meta.url)), { mode: 0o755 });
   const clients = [];
-  const env = { ...process.env, CODEX_BIN: binary, CLAUDE_BIN: binary, DUAL_AGENT_STATE_DIR: state, FAKE_CAPTURE: capture, FAKE_DESCENDANTS: descendants };
+  const env = { ...process.env, CODEX_BIN: binary, CLAUDE_BIN: binary, AGY_BIN: binary, AGY_MODEL: "fixture-model", DUAL_AGENT_STATE_DIR: state, FAKE_CAPTURE: capture, FAKE_DESCENDANTS: descendants };
   delete env.CLAUDE_PROJECT_DIR;
   for (const key of ["DUAL_AGENT_CAPTURE", "DUAL_AGENT_EXIT", "DUAL_AGENT_DELAY", "DUAL_AGENT_OUTPUT_SIZE"]) delete env[key];
   const requests = async () => (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
@@ -70,7 +70,7 @@ async function fixture(t) {
   return { root, project, state, capture, requests, descendants, connect, store: new JobStore(state) };
 }
 
-for (const [provider, profile] of [["rosalind", "rosalind_delegate"], ["gemini", "gemini"]]) {
+for (const [provider, profile] of [["rosalind", "rosalind_delegate"]]) {
   test(`${provider} exposes the same tools and uses its Codex profile`, async t => {
     const f = await fixture(t);
     const claudeHost = await f.connect(provider);
@@ -144,12 +144,12 @@ test("Codex-hosted Codex delegation uses the default profile without the Claude 
   assert.equal(c.channelEvents.length, 0);
 });
 
-test("Gemini shares edit locks, accepts cancellation across hosts, and recovers saved jobs", async t => {
+test("Antigravity shares edit locks, accepts cancellation across hosts, and recovers saved jobs", async t => {
   const f = await fixture(t);
-  const first = await f.connect("gemini", {}, f.project, "codex");
-  const otherHost = await f.connect("gemini");
+  const first = await f.connect("agy", {}, f.project, "codex");
+  const otherHost = await f.connect("agy");
   const codex = await f.connect("codex");
-  const started = await first.call("_implement", { prompt: "[hold] Gemini edit", cwd: f.project });
+  const started = await first.call("_implement", { prompt: "[hold] Antigravity edit", cwd: f.project });
   const id = started.structuredContent.task_id;
   await eventually(async () => (await f.requests()).length > 0);
   const blocked = await codex.call("_implement", { prompt: "Conflicting edit", cwd: f.project });
@@ -159,17 +159,76 @@ test("Gemini shares edit locks, accepts cancellation across hosts, and recovers 
   assert.equal(cancelled.structuredContent.status, "cancelled", text(cancelled));
   const completed = await codex.call("_implement", { prompt: "Edit after cancellation", cwd: f.project, wait: true });
   assert.equal(completed.structuredContent.status, "completed", text(completed));
-  const geminiResult = await first.call("", { prompt: "Saved Gemini answer", wait: true });
+  const agyResult = await first.call("", { prompt: "Saved Antigravity answer", wait: true });
   await first.client.close();
-  const restarted = await f.connect("gemini", {}, f.project, "codex");
-  const recovered = await restarted.call("_status", { task_id: geminiResult.structuredContent.task_id });
+  const restarted = await f.connect("agy", {}, f.project, "codex");
+  const recovered = await restarted.call("_status", { task_id: agyResult.structuredContent.task_id });
   assert.equal(recovered.structuredContent.output, "fixture answer\n");
   const listed = await restarted.call("_list", {});
-  assert.deepEqual(new Set(listed.structuredContent.jobs.map(job => job.task_id)), new Set([id, geminiResult.structuredContent.task_id]));
+  assert.deepEqual(new Set(listed.structuredContent.jobs.map(job => job.task_id)), new Set([id, agyResult.structuredContent.task_id]));
   assert.equal((await codex.call("_status", { task_id: id })).isError, true);
-  const failed = await restarted.call("", { prompt: "[fail] Gemini failure", wait: true });
+  const failed = await restarted.call("", { prompt: "[fail] Antigravity failure", wait: true });
   assert.equal(failed.structuredContent.status, "failed");
-  assert.match(failed.structuredContent.error, /Gemini exited with code 7/);
+  assert.match(failed.structuredContent.error, /Antigravity exited with code 7/);
+});
+
+test("Antigravity discovers seven native tools, pins its model, and runs reviews from scratch", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", {}, f.project);
+  const discovery = await c.client.listTools();
+  assert.deepEqual(discovery.tools.map(tool => tool.name).sort(), ["", "_review", "_implement", "_plan_review", "_status", "_list", "_cancel"].map(suffix => "delegate_agy" + suffix).sort());
+  const result = await c.call("_review", { prompt: "[slow] Review quotes ' and\nnewlines", cwd: f.project, wait: true });
+  const job = result.structuredContent;
+  assert.equal(job.status, "completed", text(result));
+  assert.equal(job.model, "fixture-model");
+  assert.equal(job.session_id, "fixture-agy-session");
+  const request = (await f.requests()).at(-1);
+  assert.equal(request.cwd, job.paths.scratch);
+  assert.equal(JSON.parse(request.wireInput).event, "user");
+  assert.ok(JSON.parse(request.wireInput).message.content.includes(f.project));
+  assert.equal(request.args[request.args.indexOf("--model") + 1], "fixture-model");
+  assert.ok(!request.args.includes("exec"));
+  assert.ok(!request.args.includes("--dangerously-skip-permissions"));
+  const settings = JSON.parse(request.args[request.args.indexOf("--settings") + 1]);
+  assert.equal(settings.toolPermission, "proceed-in-sandbox");
+  assert.equal(settings.agentMode, "");
+  assert.ok(settings.permissions.deny.includes(`write_file(${f.project})`));
+  assert.ok(settings.permissions.deny.includes("mcp(*)"));
+  assert.ok(!settings.permissions.allow.some(rule => rule.startsWith("command(")));
+  await eventually(() => c.channelEvents.some(event => event.meta.task_id === job.task_id));
+  const edited = await c.call("_implement", { prompt: "edit", cwd: f.project, wait: true });
+  assert.equal(edited.structuredContent.paths.scratch, undefined);
+  const editRequest = (await f.requests()).at(-1);
+  assert.equal(editRequest.cwd, f.project);
+  assert.equal(JSON.parse(editRequest.args[editRequest.args.indexOf("--settings") + 1]).agentMode, "auto");
+});
+
+for (const [prompt, message] of [["[denied]", /denied tool call/], ["[is-error]", /Antigravity ERROR/], ["[no-result]", /no JSON result/]]) {
+  test(`Antigravity reports ${prompt} even when the process exits successfully`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect("agy", {}, f.project, "codex");
+    const result = await c.call("", { prompt, wait: true });
+    assert.equal(result.structuredContent.status, "failed");
+    assert.match(result.structuredContent.error, message);
+    assert.equal(c.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+  });
+}
+
+test("Antigravity requires a selected model and preserves legacy Gemini job results", async t => {
+  const f = await fixture(t);
+  const missing = await f.connect("agy", { AGY_MODEL: "" }, f.project);
+  assert.match(text(await missing.call("", { prompt: "test" })), /AGY_MODEL/);
+  assert.equal((await f.requests()).length, 0);
+  const c = await f.connect("agy", {}, f.project);
+  const result = await c.call("", { prompt: "legacy result", wait: true });
+  const id = result.structuredContent.task_id;
+  const metadata = await f.store.read(id);
+  metadata.provider = "gemini";
+  await f.store.write(metadata);
+  const recovered = await c.call("_status", { task_id: id });
+  assert.equal(recovered.structuredContent.provider, "gemini");
+  assert.equal(recovered.structuredContent.output, "fixture answer\n");
+  assert.ok((await c.call("_list", {})).structuredContent.jobs.some(job => job.task_id === id));
 });
 
 for (const provider of ["codex", "claude"]) {

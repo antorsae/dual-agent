@@ -6,7 +6,7 @@ INTEGRATIONS=(
     'claude|codex|--claude-mcp||Claude'
     'rosalind|claude codex|--rosalind-mcp|rosalind_delegate|Rosalind'
     'codex|codex|--codex-from-codex||Codex'
-    'gemini|claude codex|--gemini-mcp|gemini|Gemini'
+    'agy|claude codex|--agy-mcp||Antigravity'
 )
 
 load_integration() {

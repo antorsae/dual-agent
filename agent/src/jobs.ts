@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobStore.js";
 import { runProvider } from "./runner.js";
 import { createScratch } from "./scratch.js";
-import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, Provider, TaskRequest } from "./tasks.js";
+import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, providerMatches, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 interface ActiveJob {
@@ -23,7 +23,8 @@ export class JobManager {
   }
   async submit(request: TaskRequest): Promise<Job> {
     if (this.closing) throw new Error("Delegation server is shutting down.");
-    if (!["codex", "claude", "rosalind", "gemini"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
+    if (request.provider === "gemini") throw new Error("Gemini delegation has moved to agy-delegate. Run setup with --agy-mcp.");
+    if (!["codex", "claude", "rosalind", "agy"].includes(request.provider) || !["review", "implement", "plan-review", "custom"].includes(request.type)) throw new Error("Invalid provider or task type.");
     if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("A nonempty prompt is required.");
     const mode = request.mode ?? (request.type === "implement" ? "edit" : "read-only");
     if (!["read-only", "edit"].includes(mode)) throw new Error("mode must be read-only or edit.");
@@ -31,15 +32,19 @@ export class JobManager {
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new Error("timeout_ms must be an integer from 1 to 2147483647.");
     const project = await resolveProject(request.cwd);
+    const model = request.provider === "agy" ? process.env.AGY_MODEL?.trim() : undefined;
+    if (request.provider === "agy" && (!model || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model))) {
+      throw new Error("AGY_MODEL must be a model ID from agy models. Run setup with --agy-mcp to select one.");
+    }
     if (this.closing) throw new Error("Delegation server is shutting down.");
     const job: Job = {
       version: 1, id: randomUUID(), provider: request.provider, type: request.type,
-      prompt: request.prompt, files: request.files, ...project, mode, timeoutMs,
+      prompt: request.prompt, files: request.files, ...project, mode, timeoutMs, model,
       status: "running", createdAt: new Date().toISOString(), owner: await this.owner, launching: false,
     };
     await this.store.create(job);
     try {
-      if (mode === "read-only" && isCodexProvider(job.provider)) {
+      if (mode === "read-only" && (isCodexProvider(job.provider) || job.provider === "agy")) {
         job.scratch = await createScratch(job.workspace, this.store.directory(job.id));
         await this.store.write(job);
       }
@@ -105,7 +110,7 @@ export class JobManager {
   }
   async get(id: string, provider?: Provider): Promise<Job> {
     const job = await this.store.read(id);
-    if (provider && job.provider !== provider) throw new Error(`Task ${id} belongs to ${job.provider}, not ${provider}.`);
+    if (provider && !providerMatches(job.provider, provider)) throw new Error(`Task ${id} belongs to ${job.provider}, not ${provider}.`);
     return this.store.reconcile(job);
   }
   async wait(id: string, waitMs: number, provider?: Provider): Promise<Job> {
@@ -130,7 +135,7 @@ export class JobManager {
     for (const id of await this.store.ids()) {
       try {
         const job = await this.store.read(id);
-        if (!provider || job.provider === provider) jobs.push(await this.store.reconcile(job));
+        if (!provider || providerMatches(job.provider, provider)) jobs.push(await this.store.reconcile(job));
       } catch (error) { console.error(`[dual-agent] Cannot read ${id}: ${error}`); }
     }
     return jobs.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit);

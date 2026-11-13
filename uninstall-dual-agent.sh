@@ -57,6 +57,12 @@ for index in "${!INTEGRATIONS[@]}"; do
     done
 done
 
+# Include the former Gemini integration during migration and uninstall.
+remove_server claude gemini-delegate
+remove_server codex gemini-delegate
+CLAUDE_SERVERS+=(gemini-delegate)
+CODEX_SERVERS+=(gemini-delegate)
+
 # Include retired skills so upgrades can still be fully uninstalled.
 CLAUDE_SKILLS=("${CLAUDE_SERVERS[@]}" codex-read codex-status codex-implement codex-plan-review codex-review)
 CODEX_SKILLS=("${CODEX_SERVERS[@]}" claude-status read-task respond)
