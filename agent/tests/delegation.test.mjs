@@ -30,6 +30,7 @@ async function fixture(t) {
   await writeFile(binary, await readFile(new URL("./fixtures/fake-agent.mjs", import.meta.url)), { mode: 0o755 });
   const clients = [];
   const env = { ...process.env, CODEX_BIN: binary, CLAUDE_BIN: binary, AGY_BIN: binary, AGY_MODEL: "fixture-model", DUAL_AGENT_STATE_DIR: state, FAKE_CAPTURE: capture, FAKE_DESCENDANTS: descendants };
+  delete env.AGY_MODELS;
   delete env.CLAUDE_PROJECT_DIR;
   for (const key of ["DUAL_AGENT_CAPTURE", "DUAL_AGENT_EXIT", "DUAL_AGENT_DELAY", "DUAL_AGENT_OUTPUT_SIZE"]) delete env[key];
   const requests = async () => (await readFile(capture, "utf8")).trim().split("\n").filter(Boolean).map(JSON.parse);
@@ -250,6 +251,98 @@ test("Antigravity requires a selected model and preserves legacy Gemini job resu
   assert.equal(recovered.structuredContent.output, "fixture answer\n");
   assert.ok((await c.call("_list", {})).structuredContent.jobs.some(job => job.task_id === id));
 });
+
+for (const marker of ["", "[stderr-quota]"]) {
+  test(`Antigravity falls back in order on quota exhaustion ${marker}`, async t => {
+    const f = await fixture(t);
+    const models = ["hydrogen", "argon", "opus"];
+    const c = await f.connect("agy", { AGY_MODELS: models.join(","), FAKE_AGY_QUOTA_MODELS: "hydrogen,argon" }, f.project);
+    const result = await c.call("_review", { prompt: `${marker} review`, wait: true });
+    const job = result.structuredContent;
+    assert.equal(job.status, "completed", text(result));
+    assert.equal(job.model, "opus");
+    assert.deepEqual(job.models, models);
+    assert.deepEqual(job.attempts.map(attempt => attempt.status), ["quota-exhausted", "quota-exhausted", "completed"]);
+    const requests = await f.requests();
+    assert.deepEqual(requests.map(request => request.args[request.args.indexOf("--model") + 1]), models);
+    assert.equal(new Set(requests.map(request => request.cwd)).size, 1);
+    assert.equal(new Set(requests.map(request => request.args[request.args.indexOf("--settings") + 1])).size, 1);
+    assert.equal(new Set(requests.map(request => request.input)).size, 1);
+    const diagnostics = await readFile(job.paths.stderr, "utf8");
+    for (const model of models) assert.ok(diagnostics.includes(`Starting model ${model}`));
+    assert.equal((await readFile(job.paths.stdout, "utf8")).split('"event":"init"').length - 1, 3);
+    const recovered = await c.call("_status", { task_id: job.task_id });
+    assert.deepEqual(recovered.structuredContent.attempts, job.attempts);
+    assert.equal(job.output, "fixture answer\n");
+  });
+}
+
+test("Antigravity stops once every model is exhausted and retains diagnostics", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_MODELS: "hydrogen,argon" }, f.project);
+  const result = await c.call("_review", { prompt: "review", wait: true });
+  assert.equal(result.structuredContent.status, "failed");
+  assert.match(result.structuredContent.error, /All configured Antigravity models exhausted/);
+  assert.equal((await f.requests()).length, 2);
+  assert.equal(result.structuredContent.output, "partial result");
+});
+
+for (const prompt of ["[is-error]", "[denied]", "[denied-actions-empty]", "[no-result]", "[fail]"]) {
+  test(`Antigravity does not fall back for ${prompt}`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon" }, f.project);
+    const result = await c.call("_review", { prompt, wait: true });
+    assert.equal(result.structuredContent.status, "failed");
+    assert.equal((await f.requests()).length, 1);
+  });
+}
+
+test("Antigravity can retry an edit before tools start and keeps one edit lock across models", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_MODELS: "hydrogen", FAKE_AGY_QUOTA_DELAY: "200" }, f.project);
+  const codex = await f.connect("codex", {}, f.project);
+  const started = await c.call("_implement", { prompt: "[hold] edit" });
+  await eventually(async () => (await f.requests()).length === 1);
+  assert.equal((await codex.call("_implement", { prompt: "conflicting edit" })).isError, true);
+  await eventually(async () => (await f.requests()).length === 2);
+  assert.equal((await codex.call("_implement", { prompt: "still conflicting" })).isError, true);
+  const cancelled = await c.call("_cancel", { task_id: started.structuredContent.task_id });
+  assert.equal(cancelled.structuredContent.status, "cancelled");
+  assert.equal((await codex.call("_implement", { prompt: "now free", wait: true })).structuredContent.status, "completed");
+});
+
+test("Antigravity does not replay edits after a tool has started", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_MODELS: "hydrogen" }, f.project);
+  const result = await c.call("_implement", { prompt: "[tool-before-quota] edit", wait: true });
+  assert.equal(result.structuredContent.status, "failed");
+  assert.match(result.structuredContent.error, /tools have already run/);
+  assert.equal((await f.requests()).length, 1);
+});
+
+test("Antigravity read-only work may restart after tools and keeps the original job deadline", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon,opus", FAKE_AGY_QUOTA_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_DELAY: "1000" }, f.project);
+  const result = await c.call("_review", { prompt: "[tool-before-quota] review", timeout_ms: 1750, wait: true });
+  assert.equal(result.structuredContent.status, "failed");
+  assert.match(result.structuredContent.error, /timed out after 1.75s/);
+  assert.deepEqual((await f.requests()).map(request => request.args[request.args.indexOf("--model") + 1]), ["hydrogen", "argon"]);
+});
+
+for (const stop of ["cancel", "timeout", "shutdown"]) {
+  test(`Antigravity ${stop} prevents a later fallback attempt`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_MODELS: "hydrogen", FAKE_AGY_QUOTA_DELAY: "1500" }, f.project);
+    const started = await c.call("_review", { prompt: "review", ...(stop === "timeout" ? { timeout_ms: 300 } : {}) });
+    await eventually(async () => (await f.requests()).length === 1);
+    const id = started.structuredContent.task_id;
+    if (stop === "cancel") await c.call("_cancel", { task_id: id });
+    else if (stop === "shutdown") await c.client.close();
+    else await c.call("_status", { task_id: id, wait_ms: 3000 });
+    assert.equal((await f.requests()).length, 1);
+    assert.equal((await f.store.read(id)).status, { cancel: "cancelled", timeout: "failed", shutdown: "interrupted" }[stop]);
+  });
+}
 
 for (const provider of ["codex", "claude"]) {
   test(`${provider}: discovers all tools and handles a different prompt per call`, async t => {

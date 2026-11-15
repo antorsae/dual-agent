@@ -21,6 +21,25 @@ process.stderr.write("fixture diagnostic\n");
 const emit = event => process.stdout.write(JSON.stringify(event) + "\n");
 if (provider === "claude") emit({ type: "system", subtype: "init", session_id: "fixture-claude-session" });
 if (provider === "agy") emit({ event: "init", conversation_id: "fixture-agy-session", init: { model: args[args.indexOf("--model") + 1] } });
+if (provider === "agy") {
+  const model = args[args.indexOf("--model") + 1];
+  const quotaModels = (process.env.FAKE_AGY_QUOTA_MODELS || "").split(",");
+  if (quotaModels.includes(model)) {
+    if (input.includes("[tool-before-quota]")) {
+      emit({ event: "step_update", step_update: { state: "ACTIVE", step_type: "tool", tool_info: { name: "write_file" } } });
+    }
+    await new Promise(resolve => setTimeout(resolve, Number(process.env.FAKE_AGY_QUOTA_DELAY || 0)));
+    if (input.includes("[stderr-quota]")) {
+      // Chunks can split the native diagnostic marker or JSON anywhere.
+      process.stderr.write('AGY_ER');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      process.stderr.write('ROR: {"status":"RESOURCE_EXHAUSTED","http_status":429,"message":"Model quota exhausted"}\n');
+    } else {
+      emit({ event: "result", result: { status: "ERROR", error: "RESOURCE_EXHAUSTED: Model quota exceeded", response: "partial result" } });
+    }
+    process.exit(3);
+  }
+}
 if (input.includes("[tree]")) {
   const child = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdio: "inherit" });
   if (process.env.FAKE_DESCENDANTS) appendFileSync(process.env.FAKE_DESCENDANTS, String(child.pid) + "\n");

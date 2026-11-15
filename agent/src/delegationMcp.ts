@@ -51,6 +51,9 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const contextGuidance = provider === "agy"
     ? " Before review, save required external notes and complete parent/submodule diffs inside the allowed worktree. Include new files. Tell the worker to review saved diffs plus source without external Git metadata or /tmp paths; keep read-only mode and existing permissions."
     : "";
+  const modelGuidance = provider === "agy"
+    ? " Uses the configured model priority and falls back on model quota/rate-limit failures. Editing retries only before tools start. Status includes the actual model and attempt history."
+    : "";
   const enableChannel = options.enableChannel ?? provider !== "claude";
   const channelSource = options.channelSource ?? serverName;
   const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
@@ -87,7 +90,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   ];
   const tools = kinds.map(([suffix, type, description]) => ({
     name: prefix + suffix,
-    description: description + (type !== "implement" ? scratchGuidance + contextGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
+    description: description + modelGuidance + (type !== "implement" ? scratchGuidance + contextGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
     inputSchema: {
       type: "object" as const, additionalProperties: false,
       properties: { [type === "plan-review" ? "plan" : "prompt"]: { type: "string", description: "Complete task instructions, requirements, and constraints for this call." }, ...common },
@@ -129,6 +132,8 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       `**Task ID**: ${job.id}`, `**Status**: ${job.status.toUpperCase()}${cancelRequested && !isFinished(job) ? " (cancellation requested)" : ""}`,
       `**Provider / Type / Mode**: ${job.provider} / ${job.type} / ${job.mode}`, `**Project**: ${job.cwd}`, `**Workspace**: ${job.workspace}`,
       ...(job.model ? [`**Model**: ${job.model}`] : []),
+      ...(job.models ? [`**Model priority**: ${job.models.join(" → ")}`] : []),
+      ...(job.attempts?.length ? [`**Model attempts**: ${job.attempts.map(attempt => `${attempt.model}: ${attempt.status}`).join("; ")}`] : []),
       `**Created**: ${job.createdAt}`, `**${isFinished(job) ? "Duration" : "Elapsed"}**: ${elapsed}`,
       `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr${activity}`,
       ...(job.sessionId ? [`**Session ID**: ${job.sessionId}`] : []), ...(job.error ? [`**Error**: ${job.error}`] : []),
@@ -139,7 +144,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ].join("\n");
     return {
       content: [{ type: "text" as const, text }],
-      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, model: job.model, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
+      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, model: job.model, models: job.models, attempts: job.attempts, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
       isError: job.status === "failed" || job.status === "interrupted",
     };
   }

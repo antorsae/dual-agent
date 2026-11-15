@@ -20,7 +20,7 @@ function nativeSettings(): { toolPermission?: string; permissions?: { allow?: st
 }
 
 export function agyArgs(job: Job): string[] {
-  if (!job.model) throw new Error("AGY_MODEL is required. Run setup with --agy-mcp to select an Antigravity model.");
+  if (!job.model) throw new Error("AGY_MODELS is required. Run setup with --agy-mcp to select an Antigravity model priority list.");
   const readOnly = job.mode === "read-only";
   if (readOnly && !job.scratch) throw new Error("Read-only Antigravity job has no scratch directory.");
   if (readOnly && /[()\r\n]/.test(job.workspace + job.scratch)) {

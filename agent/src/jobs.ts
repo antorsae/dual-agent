@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobStore.js";
 import { runProvider } from "./runner.js";
 import { createScratch } from "./scratch.js";
+import { parseAgyModels } from "./agyModels.mjs";
 import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, providerMatches, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -32,14 +33,12 @@ export class JobManager {
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new Error("timeout_ms must be an integer from 1 to 2147483647.");
     const project = await resolveProject(request.cwd);
-    const model = request.provider === "agy" ? process.env.AGY_MODEL?.trim() : undefined;
-    if (request.provider === "agy" && (!model || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model))) {
-      throw new Error("AGY_MODEL must be a model ID from agy models. Run setup with --agy-mcp to select one.");
-    }
+    const models = request.provider === "agy" ? parseAgyModels(process.env.AGY_MODELS ?? process.env.AGY_MODEL ?? "") : undefined;
+    const model = models?.[0];
     if (this.closing) throw new Error("Delegation server is shutting down.");
     const job: Job = {
       version: 1, id: randomUUID(), provider: request.provider, type: request.type,
-      prompt: request.prompt, files: request.files, ...project, mode, timeoutMs, model,
+      prompt: request.prompt, files: request.files, ...project, mode, timeoutMs, model, models,
       status: "running", createdAt: new Date().toISOString(), owner: await this.owner, launching: false,
     };
     await this.store.create(job);
@@ -80,13 +79,7 @@ export class JobManager {
       }).catch(error => this.stop(active, "failed", `Cannot read cancellation state: ${error.message}`)).finally(() => { checking = false; });
     }, 250);
     try {
-      job.launching = true;
-      await this.store.write(job);
-      const result = await runProvider(job, this.store, {
-        signal: active.controller.signal,
-        onSpawn: async child => { job.child = child; await this.store.write(job); },
-        onDiagnostic: this.onDiagnostic,
-      });
+      const result = await this.runAttempts(job, active);
       await atomicWrite(this.store.file(job.id, "result.md"), result.output);
       job.cleanupConfirmed = result.cleanupConfirmed;
       job.sessionId = result.sessionId;
@@ -96,6 +89,10 @@ export class JobManager {
     } catch (error) {
       job.status = "failed";
       job.error = String(error instanceof Error ? error.message : error);
+      const attempt = job.attempts?.at(-1);
+      if (attempt?.status === "running") {
+        Object.assign(attempt, { status: "failed", endedAt: new Date().toISOString(), error: job.error });
+      }
     } finally {
       clearTimeout(timeout);
       clearInterval(poll);
@@ -107,6 +104,40 @@ export class JobManager {
       this.active.delete(job.id);
       this.onComplete?.(job);
     }
+  }
+  private async runAttempts(job: Job, active: ActiveJob) {
+    const models = job.provider === "agy" ? job.models! : [undefined];
+    for (let index = 0; index < models.length; index++) {
+      job.model = models[index];
+      // Reset spawn state before each attempt so a crash cannot release the edit lock early.
+      job.child = undefined;
+      job.cleanupConfirmed = undefined;
+      job.sessionId = undefined;
+      job.launching = true;
+      const attempt = job.model ? { model: job.model, startedAt: new Date().toISOString(), status: "running" as const } : undefined;
+      if (attempt) (job.attempts ??= []).push(attempt);
+      await this.store.write(job);
+      const result = await runProvider(job, this.store, {
+        signal: active.controller.signal,
+        onSpawn: async child => { job.child = child; await this.store.write(job); },
+        onDiagnostic: this.onDiagnostic,
+      });
+      job.cleanupConfirmed = result.cleanupConfirmed;
+      if (attempt) Object.assign(attempt, { endedAt: new Date().toISOString(), sessionId: result.sessionId,
+        status: active.stop?.status ?? (result.quotaExhausted ? "quota-exhausted" : result.error ? "failed" : "completed"), error: result.error });
+      if (await this.store.cancellationRequested(job.id)) this.stop(active, "cancelled", "Cancelled by the caller.");
+      if (!result.quotaExhausted || !result.cleanupConfirmed || active.stop || active.controller.signal.aborted) return result;
+      if (job.mode === "edit" && result.toolsStarted) {
+        result.error += " Automatic fallback stopped because tools have already run in edit mode; inspect the workspace before retrying.";
+        return result;
+      }
+      if (index + 1 === models.length) {
+        result.error = `All configured Antigravity models exhausted their quota/rate limit: ${models.join(" → ")}.`;
+        return result;
+      }
+      await this.store.write(job);
+    }
+    throw new Error("No Antigravity models configured.");
   }
   async get(id: string, provider?: Provider): Promise<Job> {
     const job = await this.store.read(id);

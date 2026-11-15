@@ -1,6 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { appendFile, readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
@@ -8,6 +8,7 @@ import { isCodexProvider, Job, buildPrompt, ProcessIdentity, providerLabel } fro
 import { JobStore, processIdentity } from "./jobStore.js";
 import { readOnlyCodexArgs, scratchEnvironment } from "./scratch.js";
 import { agyArgs, agyInput } from "./agy.js";
+import { isAgyQuotaError, parseAgyError } from "./agyModels.mjs";
 
 const execFileAsync = promisify(execFile);
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -17,6 +18,8 @@ export interface RunResult {
   exitCode: number | null;
   error?: string;
   cleanupConfirmed: boolean;
+  quotaExhausted?: boolean;
+  toolsStarted?: boolean;
 }
 
 export function commandFor(job: Job, store: JobStore): { command: string; args: string[] } {
@@ -72,6 +75,10 @@ export async function runProvider(job: Job, store: JobStore, options: {
   onDiagnostic?: (text: string) => void;
 }): Promise<RunResult> {
   const { command, args } = commandFor(job, store);
+  if (job.provider === "agy") {
+    await appendFile(store.file(job.id, "stderr.log"), `[dual-agent] Starting model ${job.model}\n`, { mode: 0o600 });
+  }
+  if (options.signal.aborted) return { output: "", exitCode: null, cleanupConfirmed: true, error: "Cancelled before starting worker." };
   const proc = spawn(command, args, {
     cwd: job.provider === "agy" && job.scratch ? job.scratch : job.cwd,
     detached: process.platform !== "win32", stdio: ["pipe", "pipe", "pipe"],
@@ -96,6 +103,20 @@ export async function runProvider(job: Job, store: JobStore, options: {
   let claudeResult: { result?: unknown; session_id?: unknown; is_error?: unknown; permission_denials?: unknown } | undefined;
   let agyResult: { response?: unknown; conversation_id?: unknown; status?: unknown; error?: unknown; denied_actions?: unknown } | undefined;
   let agyDenied = false;
+  let agyToolsStarted = false;
+  let nativeAgyError: unknown;
+  let stderrLine = "";
+  const stderrDecoder = new StringDecoder("utf8");
+  const parseStderr = (line: string) => {
+    const error = parseAgyError(line);
+    if (error !== undefined) nativeAgyError = error;
+  };
+  if (job.provider === "agy") proc.stderr.on("data", chunk => {
+    const lines = (stderrLine + stderrDecoder.write(chunk)).split("\n");
+    stderrLine = lines.pop()!;
+    lines.forEach(parseStderr);
+    if (stderrLine.length > 1024 * 1024) stderrLine = "";
+  });
   let pendingLine = "";
   const decoder = new StringDecoder("utf8");
   const parseLine = (line: string) => {
@@ -104,6 +125,7 @@ export async function runProvider(job: Job, store: JobStore, options: {
       if (job.provider === "agy") {
         if (event.event === "init" && typeof event.conversation_id === "string") sessionId = event.conversation_id;
         if (event.event === "result") agyResult = event.result;
+        if (event.step_update?.step_type === "tool" || event.step_update?.tool_info || event.step_update?.subagent_info) agyToolsStarted = true;
         const error = event.step_update?.tool_info?.error;
         if (error && /permission|denied|approval/i.test(JSON.stringify(error))) agyDenied = true;
       } else if (isCodexProvider(job.provider)) {
@@ -111,7 +133,11 @@ export async function runProvider(job: Job, store: JobStore, options: {
       } else if (event.type === "system" && event.subtype === "init" && typeof event.session_id === "string") {
         sessionId = event.session_id;
       } else if (event.type === "result") claudeResult = event;
-    } catch { /* Full raw output remains in stdout.log. */ }
+    } catch {
+      // A malformed event makes prior side effects uncertain; do not replay edits.
+      if (job.provider === "agy" && line.trim()) agyToolsStarted = true;
+      /* Full raw output remains in stdout.log. */
+    }
   };
   proc.stdout.on("data", chunk => {
     const lines = decoder.write(chunk).split("\n");
@@ -122,8 +148,8 @@ export async function runProvider(job: Job, store: JobStore, options: {
     if (pendingLine.length > 32 * 1024 * 1024) pendingLine = "";
   });
   const outputs = [
-    pipeline(proc.stdout, createWriteStream(store.file(job.id, "stdout.log"), { mode: 0o600 })),
-    pipeline(proc.stderr, createWriteStream(store.file(job.id, "stderr.log"), { mode: 0o600 })),
+    pipeline(proc.stdout, createWriteStream(store.file(job.id, "stdout.log"), { mode: 0o600, flags: job.provider === "agy" ? "a" : "w" })),
+    pipeline(proc.stderr, createWriteStream(store.file(job.id, "stderr.log"), { mode: 0o600, flags: job.provider === "agy" ? "a" : "w" })),
   ].map(promise => promise.catch(error => { problem = error; void stop(); }));
   try {
     await new Promise<void>((resolve, reject) => { proc.once("spawn", resolve); proc.once("error", reject); });
@@ -138,12 +164,21 @@ export async function runProvider(job: Job, store: JobStore, options: {
   const cleanupConfirmed = await stop();
   await Promise.all(outputs);
   parseLine(pendingLine + decoder.end());
+  if (job.provider === "agy") parseStderr(stderrLine + stderrDecoder.end());
   options.signal.removeEventListener("abort", abort);
 
   let output = "";
+  const quotaExhausted = job.provider === "agy" && !problem && !options.signal.aborted && !agyDenied &&
+    !(Array.isArray(agyResult?.denied_actions) && agyResult.denied_actions.length) &&
+    (isAgyQuotaError(agyResult?.error) || isAgyQuotaError(agyResult?.status) ||
+      (code !== 0 && isAgyQuotaError(nativeAgyError)));
   if (!problem) {
     try {
       if (job.provider === "agy") {
+        if (quotaExhausted) {
+          if (typeof agyResult?.response === "string") output = agyResult.response;
+          throw new Error(`Antigravity quota/rate limit exhausted for ${job.model}.`);
+        }
         if (!agyResult || typeof agyResult.response !== "string") throw new Error("Antigravity returned no JSON result; see stdout.log and stderr.log.");
         output = agyResult.response;
         if (typeof agyResult.conversation_id === "string") sessionId = agyResult.conversation_id;
@@ -175,5 +210,5 @@ export async function runProvider(job: Job, store: JobStore, options: {
   if (!problem && code !== 0) problem = new Error(`${providerLabel(job.provider)} exited with code ${code}`);
   if (!problem && !output.trim()) problem = new Error(`${providerLabel(job.provider)} exited without a final answer; see stdout.log and stderr.log.`);
   if (!cleanupConfirmed) problem = new Error("Worker process cleanup could not be confirmed; the edit lock is retained.");
-  return { output, sessionId, exitCode: code, error: problem?.message, cleanupConfirmed };
+  return { output, sessionId, exitCode: code, error: problem?.message, cleanupConfirmed, quotaExhausted, toolsStarted: agyToolsStarted };
 }

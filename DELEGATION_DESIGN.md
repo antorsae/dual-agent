@@ -86,5 +86,13 @@ and `result` events. Read-only jobs run in scratch: the original workspace gets
 read permission and an explicit write denial. Terminal commands use the native
 sandbox, with approval-required actions denied in headless mode. Edit jobs use
 native auto mode and the shared edit lock. Model IDs come from `agy models` and
-are persisted per registration and per job. Legacy Gemini jobs remain readable
+are persisted in priority order per registration and per job. Legacy Gemini jobs remain readable
 through the Antigravity management tools without rewriting their metadata.
+
+AGY retries the next configured model only on an explicit model quota/rate-limit
+failure. All attempts keep the same task ID, deadline, edit lock, permissions, and
+scratch directory. Native processes are cleaned up between attempts; cancellation
+prevents a later attempt. Read-only work restarts from the original prompt, while
+editing stops after tools have started to avoid replaying side effects. Attempt
+history and combined logs remain available with the final result. New jobs always
+start at the highest-priority model, allowing natural return after quota refresh.

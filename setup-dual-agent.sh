@@ -113,12 +113,13 @@ show_help() {
     echo "  --skip-profile-checks  Skip live Rosalind and Antigravity checks"
     echo "  --skip-rosalind-profile-check Skip only the live Rosalind check"
     echo "  --skip-agy-check        Skip the live Antigravity model check"
-    echo "  --agy-model MODEL       Select an agy model ID for unattended setup"
+    echo "  --agy-models ID,ID,...   Select agy models in priority order"
+    echo "  --agy-model MODEL       Select a single model without fallback"
     echo "  --verify-rosalind-profile Select Rosalind and enable its live check"
     echo "  --verify-agy            Select Antigravity and enable its live check"
     echo "  --mcp, --rosalind, --agy  Alias their corresponding --*-mcp options"
     echo "Options may be combined. Each integration is installed once."
-    echo "Selected Rosalind and Antigravity integrations each send one live request by default."
+    echo "Live checks are enabled by default; Antigravity tries the next model on quota exhaustion."
 }
 
 while [ "$#" -gt 0 ]; do
@@ -130,7 +131,7 @@ while [ "$#" -gt 0 ]; do
         --mcp) select_option --codex-mcp ;;
         --rosalind) select_option --rosalind-mcp ;;
         --agy|--gemini|--gemini-mcp) select_option --agy-mcp ;;
-        --agy-model) [ "$#" -gt 0 ] || fail "--agy-model requires a model ID."; AGY_MODEL="$1"; shift; select_option --agy-mcp ;;
+        --agy-models|--agy-model) [ "$#" -gt 0 ] || fail "$setup_arg requires model IDs."; AGY_MODELS="$1"; shift; select_option --agy-mcp ;;
         --skip-profile-checks) VERIFY_ROSALIND_PROFILE=0; VERIFY_AGY=0 ;;
         --skip-rosalind-profile-check) VERIFY_ROSALIND_PROFILE=0 ;;
         --skip-agy-check|--skip-gemini-profile-check) VERIFY_AGY=0 ;;
@@ -144,7 +145,7 @@ done
 echo -e "${BLUE}Dual Agent Environment Setup${NC}"
 if [ "$INSTALL_REQUESTED" -eq 0 ]; then
     INTERACTIVE_INSTALL=1
-    echo "Selected Rosalind and Antigravity integrations each send one live request unless skipped."
+    echo "Live checks are enabled unless skipped; Antigravity tries the next model on quota exhaustion."
     while true; do
         echo "Select integrations (toggle a number, then continue):"
         for index in "${!INTEGRATIONS[@]}"; do
@@ -353,7 +354,7 @@ register_integration() {
         if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then server_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"); fi
         if [ -n "$CLAUDE_WORKER_EFFORT" ]; then server_env+=(--env "CLAUDE_CODE_EFFORT_LEVEL=$CLAUDE_WORKER_EFFORT"); fi
     elif [ "$provider" = "agy" ]; then
-        server_env+=(--env "AGY_BIN=$DELEGATE_AGY_BIN" --env "AGY_MODEL=$DELEGATE_AGY_MODEL")
+        server_env+=(--env "AGY_BIN=$DELEGATE_AGY_BIN" --env "AGY_MODELS=$DELEGATE_AGY_MODELS" --env "AGY_MODEL=$DELEGATE_AGY_MODEL")
     else
         server_env+=(--env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
     fi
@@ -384,7 +385,7 @@ if [ "$NEED_AGY_WORKER" -eq 1 ]; then
     select_agy_model
     case "$VERIFY_AGY" in
         0) echo "  Live Antigravity model check: skipped" ;;
-        1) run_step "Live Antigravity model check (one request)" verify_agy_model || fail "Antigravity model check failed. Fix authentication/model selection or use --skip-agy-check." ;;
+        1) run_step "Live Antigravity model check" verify_agy_model || fail "Antigravity model check failed. Fix authentication/model selection or use --skip-agy-check." ;;
         *) fail "AGY_VERIFY_MODEL must be 0 or 1." ;;
     esac
 fi
@@ -439,4 +440,4 @@ for index in "${!INTEGRATIONS[@]}"; do
     for host in $INTEGRATION_HOSTS; do echo "Check registration: $host mcp get $INTEGRATION_PROVIDER-delegate"; done
 done
 if [ -n "$CLAUDE_WORKER_EFFORT" ]; then echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"; fi
-if [ "$NEED_AGY_WORKER" -eq 1 ]; then echo "Antigravity model: $DELEGATE_AGY_MODEL"; fi
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then echo "Antigravity model priority: $DELEGATE_AGY_MODELS"; fi

@@ -31,6 +31,15 @@ export interface Job {
   workspace: string;
   scratch?: string;
   model?: string;
+  models?: string[];
+  attempts?: Array<{
+    model: string;
+    startedAt: string;
+    endedAt?: string;
+    status: "running" | "completed" | "failed" | "quota-exhausted" | "cancelled" | "interrupted";
+    sessionId?: string;
+    error?: string;
+  }>;
   mode: ExecutionMode;
   timeoutMs: number;
   status: JobStatus;

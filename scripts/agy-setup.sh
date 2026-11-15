@@ -1,11 +1,12 @@
 #!/bin/bash
 # Sourced after the installer's logging and registration helpers.
 select_agy_model() {
-    local catalog="${INSTALL_LOG}.agy-models" id label choice index default_index=""
-    local requested="${AGY_MODEL:-}" saved native_default
-    local -a ids=() labels=()
-    saved="$(codex_registration_env agy-delegate AGY_MODEL)"
-    native_default="$(node -e 'try { console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).model || ""); } catch {}' "$HOME/.gemini/antigravity-cli/settings.json")"
+    local catalog="${INSTALL_LOG}.agy-models" id label choice index number normalized
+    local requested="${AGY_MODELS:-${AGY_MODEL:-}}" saved defaults selection default_numbers=""
+    local policy="$SCRIPT_DIR/agent/src/agyModels.mjs"
+    local -a ids=() labels=() selected=() numbers=()
+    saved="$(codex_registration_env agy-delegate AGY_MODELS)"
+    if [ -z "$saved" ]; then saved="$(codex_registration_env agy-delegate AGY_MODEL)"; fi
     if ! "$DELEGATE_AGY_BIN" models > "$catalog" 2>> "$INSTALL_LOG"; then
         fail "Could not list Antigravity models. Authenticate with agy and rerun setup."
     fi
@@ -13,49 +14,74 @@ select_agy_model() {
         [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]*$ ]] && [ -n "$label" ] || continue
         ids+=("$id"); labels+=("$label")
     done < "$catalog"
-    rm -f "$catalog"
     [ "${#ids[@]}" -gt 0 ] || fail "agy models returned no model IDs. Authenticate with agy and rerun setup."
+    defaults="$(node "$policy" defaults "$catalog")"
+    selection="${saved:-$defaults}"
     if [ -n "$requested" ]; then
-        DELEGATE_AGY_MODEL="$requested"
+        selection="$requested"
     elif [ "$INTERACTIVE_INSTALL" -eq 1 ] || [ -t 0 ]; then
-        echo "Choose the Antigravity model for agy-delegate:"
+        echo "Choose the Antigravity model priority list for agy-delegate:"
+        echo "Default order: Hydrogen XHigh > Argon High > Opus 5.5 High (available models only)."
         for index in "${!ids[@]}"; do
             printf '  %s) %s (%s)\n' "$((index + 1))" "${labels[$index]}" "${ids[$index]}"
-            if [ "${ids[$index]}" = "$saved" ] || { [ -z "$saved" ] && [ "${labels[$index]}" = "$native_default" ]; }; then
-                default_index=$((index + 1))
-            fi
+        done
+        IFS=',' read -r -a selected <<< "$selection"
+        for id in "${selected[@]}"; do
+            for index in "${!ids[@]}"; do
+                if [ "$id" = "${ids[$index]}" ]; then default_numbers+="${default_numbers:+,}$((index + 1))"; fi
+            done
         done
         while true; do
-            printf 'Model number%s: ' "${default_index:+ [default: $default_index]}"
-            if ! read -r choice; then fail "No model selected. Set AGY_MODEL or pass --agy-model MODEL for unattended setup."; fi
-            choice="${choice:-$default_index}"
-            if [[ "$choice" =~ ^[0-9]+$ ]] && [ "${#choice}" -le 3 ] && [ "$((10#$choice))" -ge 1 ] && [ "$((10#$choice))" -le "${#ids[@]}" ]; then
-                DELEGATE_AGY_MODEL="${ids[$((10#$choice - 1))]}"
-                break
+            printf 'Model numbers in priority order, comma-separated%s (d = default order): ' "${default_numbers:+ [Enter: $default_numbers]}"
+            if ! read -r choice; then fail "No models selected. Set AGY_MODELS or pass --agy-models ID,ID for unattended setup."; fi
+            if [ "$choice" = d ] || [ "$choice" = D ]; then
+                selection="$defaults"
+            else
+                choice="${choice:-$default_numbers}"
+                choice="${choice// /}"
+                selection=""
+                if [[ "$choice" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
+                    IFS=',' read -r -a numbers <<< "$choice"
+                    for number in "${numbers[@]}"; do
+                        if [ "${#number}" -gt 3 ] || [ "$((10#$number))" -lt 1 ] || [ "$((10#$number))" -gt "${#ids[@]}" ]; then selection=""; break; fi
+                        selection+="${selection:+,}${ids[$((10#$number - 1))]}"
+                    done
+                fi
             fi
-            echo "Choose a model number from the list."
+            [ -n "$selection" ] && break
+            echo "Choose a model number from the list, or several numbers in priority order."
         done
-    else
-        DELEGATE_AGY_MODEL="$saved"
-        [ -n "$DELEGATE_AGY_MODEL" ] || fail "Select an Antigravity model with --agy-model MODEL or AGY_MODEL for unattended setup. Run agy models to list IDs."
     fi
-    for id in "${ids[@]}"; do
-        if [ "$id" = "$DELEGATE_AGY_MODEL" ]; then
-            echo "  Antigravity model: $DELEGATE_AGY_MODEL"
-            return 0
-        fi
-    done
-    fail "Antigravity model is unavailable: $DELEGATE_AGY_MODEL. Run agy models and select an available ID."
+    [ -n "$selection" ] || fail "No default models are available. Select models with --agy-models ID,ID or AGY_MODELS."
+    if ! normalized="$(node "$policy" validate "$selection" "$catalog")"; then
+        fail "Invalid Antigravity model priority list. Run agy models and select available IDs."
+    fi
+    rm -f "$catalog"
+    DELEGATE_AGY_MODELS="$normalized"
+    DELEGATE_AGY_MODEL="${normalized%%,*}"
+    echo "  Antigravity model priority: $DELEGATE_AGY_MODELS"
 }
 
 verify_agy_model() {
-    local result="${INSTALL_LOG}.agy-result" status=0
-    "$DELEGATE_AGY_BIN" --print="Do not use tools. Reply with exactly: DUAL_AGENT_PROFILE_OK" \
-        --model "$DELEGATE_AGY_MODEL" --output-format json --disable-slash-commands \
-        --settings '{"agentMode":"","toolPermission":"request-review","permissions":{"allow":[],"ask":[],"deny":["write_file(*)","command(*)","mcp(*)","execute_url(*)"]}}' > "$result" || status=$?
-    if [ "$status" -eq 0 ]; then
-        node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); if(r.status !== "SUCCESS" || r.error || r.response?.trim() !== "DUAL_AGENT_PROFILE_OK") { console.error("Antigravity verification failed:", r.error || r.status); process.exit(1); }' "$result" || status=$?
-    fi
-    rm -f "$result"
-    return "$status"
+    local result="${INSTALL_LOG}.agy-result" errors="${INSTALL_LOG}.agy-errors" status model
+    local -a models=()
+    IFS=',' read -r -a models <<< "$DELEGATE_AGY_MODELS"
+    for model in "${models[@]}"; do
+        status=0
+        "$DELEGATE_AGY_BIN" --print="Do not use tools. Reply with exactly: DUAL_AGENT_PROFILE_OK" \
+            --model "$model" --output-format json --disable-slash-commands \
+            --settings '{"agentMode":"","toolPermission":"request-review","permissions":{"allow":[],"ask":[],"deny":["write_file(*)","command(*)","mcp(*)","execute_url(*)"]}}' > "$result" 2> "$errors" || status=$?
+        if node "$SCRIPT_DIR/agent/src/agyModels.mjs" check "$result" "$errors" "$status"; then
+            rm -f "$result" "$errors"
+            return 0
+        else
+            status=$?
+        fi
+        cat "$errors"
+        rm -f "$result" "$errors"
+        [ "$status" -eq 75 ] || return "$status"
+        echo "  Quota exhausted for $model; checking the next configured model."
+    done
+    echo "All configured Antigravity models are quota/rate limited." >&2
+    return 1
 }

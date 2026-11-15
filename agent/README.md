@@ -42,13 +42,13 @@ codex mcp add rosalind-delegate \
 
 claude mcp add --scope user agy-delegate \
   --env AGY_BIN=/absolute/path/to/agy \
-  --env AGY_MODEL=MODEL_ID \
+  --env AGY_MODELS=MODEL_ID,FALLBACK_ID \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/agyMcp.js
 
 codex mcp add agy-delegate \
   --env AGY_BIN=/absolute/path/to/agy \
-  --env AGY_MODEL=MODEL_ID \
+  --env AGY_MODELS=MODEL_ID,FALLBACK_ID \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/agyCodexMcp.js
 
@@ -75,10 +75,13 @@ Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 `~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile
 and sends one live request through it by default.
 
-Antigravity uses the native `agy` executable and an explicit model ID from
-`agy models`. Setup prompts for the model and persists `AGY_MODEL` and `AGY_BIN`
-in both host registrations. Use `--agy-model MODEL_ID` or `AGY_MODEL` for
-unattended installation; reruns can reuse the saved registration value.
+Antigravity uses the native `agy` executable and model IDs from `agy models`.
+Setup prompts for an ordered list and persists comma-separated `AGY_MODELS`,
+the first model as legacy `AGY_MODEL`, and `AGY_BIN` in both host registrations.
+Use `--agy-models ID,ID,...` or `AGY_MODELS` for unattended installation;
+`--agy-model ID` / legacy `AGY_MODEL` select one model. Default priority is
+`gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high`, filtered to the
+available catalog. Reruns retain the saved priority.
 The Codex host forwards `GEMINI_API_KEY` when present for native API-key setups;
 normal Google sign-in uses Antigravity's cached credentials.
 
@@ -86,6 +89,16 @@ Rosalind and Antigravity perform live checks by default. `--skip-profile-checks`
 skips both; `--skip-rosalind-profile-check` and `--skip-agy-check` skip one.
 Installing Antigravity removes legacy Gemini registrations and skills only after
 the new registrations succeed. Its status/list tools can still read legacy jobs.
+
+Model fallback uses native `result.error`/`status` or structured `AGY_ERROR` quota
+diagnostics. It never treats model answers or arbitrary tool output as a quota
+failure. Attempts share the original timeout, workspace lock, and scratch, with
+the previous process cleaned up before the next starts. The same prompt starts
+a fresh session on the next model; edit jobs stop if any tool has already started.
+Cancellation and non-quota errors stop the chain. Every job starts at the first
+model; there is no cached quota percentage or permanent model switch.
+`models` and `attempts` are persisted and returned alongside the actual `model`.
+Both log files retain all attempts, with model-start markers in stderr.
 
 ## Tool contract
 

@@ -19,6 +19,8 @@ async function fixture(t, missingBinaries = []) {
   await writeFile(join(testHome, ".codex/rosalind_delegate.config.toml"), 'model = "fixture-rosalind"\n');
   await writeFile(join(testHome, ".codex/gemini.config.toml"), 'model = "fixture-gemini"\n');
   await mkdir(join(dir, "scripts"));
+  await mkdir(join(dir, "agent/src"));
+  await writeFile(join(dir, "agent/src/agyModels.mjs"), await readFile(new URL("../src/agyModels.mjs", import.meta.url)));
   for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh", "scripts/integrations.sh", "scripts/agy-setup.sh"]) {
     const source = await readFile(new URL("../../" + script, import.meta.url), "utf8");
     // Redirect managed files without changing the process HOME.
@@ -35,7 +37,7 @@ async function fixture(t, missingBinaries = []) {
   await writeFile(join(testHome, ".claude.json"), '{"unrelated":true}');
   await writeFile(log, "");
   await symlink(process.execPath, join(bin, "node"));
-  for (const command of ["bash", "dirname", "jq", "mkdir", "cp", "rm", "tee"]) {
+  for (const command of ["bash", "dirname", "jq", "mkdir", "cp", "rm", "tee", "cat"]) {
     if (missingBinaries.includes(command)) continue;
     const result = spawnSync("bash", ["-c", 'command -v "$1"', "--", command], { encoding: "utf8" });
     assert.ifError(result.error);
@@ -50,8 +52,11 @@ async function fixture(t, missingBinaries = []) {
     'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args, codexHome: process.env.CODEX_HOME }) + "\\n");',
     'if (["claude", "codex"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
-    'if (args[0] === "models") { console.log("fixture-model\\tFixture Model\\nother-model\\tOther Model"); process.exit(0); }',
-    'if (args.some(arg => arg.startsWith("--print="))) { console.log(JSON.stringify({ status: "SUCCESS", response: process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? "DUAL_AGENT_PROFILE_OK" })); process.exit(0); }',
+    'if (args[0] === "models") { console.log(process.env.DUAL_AGENT_TEST_MODELS ?? "fixture-model\\tFixture Model\\nother-model\\tOther Model\\ngemini-4-hydrogen-xhigh\\tHydrogen XHigh\\ngemini-4-argon-high\\tArgon High\\nclaude-opus-5-5-high\\tOpus High"); process.exit(0); }',
+    'if (args.some(arg => arg.startsWith("--print="))) {',
+    '  if ((process.env.DUAL_AGENT_TEST_QUOTA_MODELS || "").split(",").includes(args[args.indexOf("--model") + 1])) { console.error(\'AGY_ERROR: {"status":"RESOURCE_EXHAUSTED","code":429}\'); process.exit(3); }',
+    '  console.log(JSON.stringify({ status: "SUCCESS", response: process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? "DUAL_AGENT_PROFILE_OK" })); process.exit(0);',
+    '}',
     'if (args.includes("exec")) { process.stdin.resume(); process.stdin.on("end", () => {',
     '  if (process.env.DUAL_AGENT_TEST_NO_PROFILE_ANSWER === "1") return;',
     '  const answer = process.env.DUAL_AGENT_TEST_PROFILE_ANSWER ?? (args.includes("-p") ? "DUAL_AGENT_PROFILE_OK" : "custom executable");',
@@ -76,7 +81,7 @@ async function fixture(t, missingBinaries = []) {
     if (!missingBinaries.includes(file)) await writeFile(join(bin, file), mock, { mode: 0o755 });
   }
   const env = { ...process.env, PATH: bin, DUAL_AGENT_TEST_HOME: testHome, DUAL_AGENT_TEST_LOG: log };
-  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "GEMINI_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_TEST_NO_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE", "AGY_BIN", "AGY_MODEL", "AGY_VERIFY_MODEL"]) delete env[key];
+  for (const key of ["CODEX_BIN", "CLAUDE_BIN", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "DUAL_AGENT_STATE_DIR", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "DUAL_AGENT_TEST_FAIL_REGISTER", "DUAL_AGENT_TEST_FAIL_COMMAND", "DUAL_AGENT_TEST_NO_CONFIG", "CLAUDE_CODE_EFFORT_LEVEL", "ROSALIND_VERIFY_PROFILE", "GEMINI_VERIFY_PROFILE", "DUAL_AGENT_TEST_PROFILE_ANSWER", "DUAL_AGENT_TEST_NO_PROFILE_ANSWER", "DUAL_AGENT_VERBOSE", "AGY_BIN", "AGY_MODEL", "AGY_MODELS", "AGY_VERIFY_MODEL", "DUAL_AGENT_TEST_QUOTA_MODELS", "DUAL_AGENT_TEST_MODELS"]) delete env[key];
   env.AGY_MODEL = "fixture-model";
   async function runScript(script, args, input, overrides, expectedStatus) {
     const result = spawnSync("bash", [join(dir, script), ...args], {
@@ -567,18 +572,66 @@ test("Antigravity saves an explicit model and reuses it in unattended setup", as
   assert.ok(!recent.some(call => call.args.some(arg => arg.startsWith("--print="))));
 });
 
-test("Antigravity interactive default follows the current native model", async t => {
+test("Antigravity interactive default is Hydrogen, Argon, Opus and preserves native settings", async t => {
   const f = await fixture(t);
   const settings = join(f.testHome, ".gemini/antigravity-cli/settings.json");
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(settings, '{"model":"Other Model"}');
   const { calls } = await f.run([], "5c\n", { AGY_MODEL: "" });
-  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "other-model");
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODELS, "gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high");
   assert.equal(await readFile(settings, "utf8"), '{"model":"Other Model"}');
 });
 
+test("Antigravity accepts ordered menu selections and reuses the saved priority", async t => {
+  const f = await fixture(t);
+  const first = await f.run([], "5c2,1,2\n", { AGY_MODEL: "" });
+  for (const host of ["claude", "codex"]) assert.equal(registrationEnv(first.calls, host, "agy-delegate").AGY_MODELS, "other-model,fixture-model");
+  const next = await f.run(["--agy-mcp", "--skip-agy-check"], "", { AGY_MODEL: "" });
+  assert.equal(registrationEnv(next.calls.slice(first.calls.length), "codex", "agy-delegate").AGY_MODELS, "other-model,fixture-model");
+});
+
+test("Antigravity uses available defaults for a fresh unattended install", async t => {
+  const f = await fixture(t);
+  const { calls } = await f.run(["--agy-mcp"], "", { AGY_MODEL: "" });
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODELS, "gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high");
+});
+
+test("Antigravity explicit priorities override single-model settings and can be reset to defaults", async t => {
+  const f = await fixture(t);
+  const first = await f.run(["--agy-models", "other-model,fixture-model"]);
+  assert.equal(registrationEnv(first.calls, "codex", "agy-delegate").AGY_MODELS, "other-model,fixture-model");
+  const reset = await f.run([], "5cd\n", { AGY_MODEL: "" });
+  assert.equal(registrationEnv(reset.calls.slice(first.calls.length), "codex", "agy-delegate").AGY_MODELS, "gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high");
+});
+
+test("Antigravity live setup check falls back only on a model quota failure", async t => {
+  const f = await fixture(t);
+  const { calls } = await f.run(["--agy-models", "fixture-model,other-model"], "", { DUAL_AGENT_TEST_QUOTA_MODELS: "fixture-model" });
+  const checks = calls.filter(call => call.args.some(arg => arg.startsWith("--print=")));
+  assert.deepEqual(checks.map(call => call.args[call.args.indexOf("--model") + 1]), ["fixture-model", "other-model"]);
+  assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODELS, "fixture-model,other-model");
+});
+
 for (const [reason, overrides] of [
-  ["missing selection", { AGY_MODEL: "" }],
+  ["all quotas exhausted", { DUAL_AGENT_TEST_QUOTA_MODELS: "fixture-model,other-model" }],
+  ["wrong response", { DUAL_AGENT_TEST_PROFILE_ANSWER: "wrong" }],
+]) {
+  test(`Antigravity priority setup fails without registrations for ${reason}`, async t => {
+    const f = await fixture(t);
+    const { calls } = await f.run(["--agy-models", "fixture-model,other-model"], "", overrides, 1);
+    assert.ok(!calls.some(call => call.args[0] === "mcp"));
+    assert.equal(calls.filter(call => call.args.some(arg => arg.startsWith("--print="))).length, reason === "wrong response" ? 1 : 2);
+  });
+}
+
+test("Antigravity skip check still validates every model in an explicit priority list", async t => {
+  const f = await fixture(t);
+  const { calls } = await f.run(["--agy-models", "fixture-model,missing-model", "--skip-agy-check"], "", {}, 1);
+  assert.ok(!calls.some(call => call.args[0] === "mcp" || call.args.some(arg => arg.startsWith("--print="))));
+});
+
+for (const [reason, overrides] of [
+  ["no available defaults", { AGY_MODEL: "", DUAL_AGENT_TEST_MODELS: "fixture-model\tFixture Model" }],
   ["unavailable model", { AGY_MODEL: "not-in-catalog" }],
   ["catalog failure", { DUAL_AGENT_TEST_FAIL_COMMAND: "agy" }],
   ["live check failure", { DUAL_AGENT_TEST_PROFILE_ANSWER: "wrong answer" }],

@@ -62,21 +62,32 @@ Rosalind setup requires the Codex profile file
 
 Antigravity setup requires the native `agy` CLI. Sign in once with `agy`, then
 choose integration 5 or run `./setup-dual-agent.sh --agy-mcp` in a terminal.
-Setup lists the models returned by `agy models` and asks which one to use.
-It offers the saved delegation model, or your current native model, as the default.
-For unattended setup, choose a model ID explicitly:
+Setup lists the models returned by `agy models` and asks for model numbers in
+priority order, such as `4,2,7`. The initial default is **Hydrogen XHigh → Argon
+High → Opus 5.5 High**, using the available models from that list. Reruns retain
+the saved priority; enter `d` to restore the default. For unattended setup:
 
 ```bash
 agy models
-./setup-dual-agent.sh --agy-model MODEL_ID
+./setup-dual-agent.sh --agy-models gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high
 ```
 
-`AGY_MODEL` and `AGY_BIN` can also select the model and executable. Setup stores
-both in the host registrations; unattended reruns retain the saved model.
-Unavailable model IDs fail setup instead of silently selecting another model.
+`AGY_MODELS` accepts the same comma-separated priority list; `AGY_BIN` selects the
+executable. `--agy-model MODEL_ID` or legacy `AGY_MODEL` selects a single model
+without fallback. Setup saves the priority in both host registrations and checks
+every selected ID against the live catalog. Existing single-model registrations
+keep their selection until setup is rerun with a new list.
 
-Selected Rosalind and Antigravity integrations each make one live request by
-default before setup changes registrations. Use `--skip-profile-checks` to skip
+Each AGY job starts with the first model. If AGY reports a model quota/rate-limit
+failure, it tries the next model in order, once per model. It stops on other
+errors, cancellation, or the original job timeout. Read-only work can restart on
+the next model; edit work can retry only before any tool has started. Status
+shows the current model, priority, and attempt history, and logs retain all attempts.
+New jobs try the preferred model again so it is used after its quota refreshes.
+
+Selected Rosalind and Antigravity integrations perform live checks by default
+before setup changes registrations. AGY checks stop at the first successful model,
+trying the next only on quota exhaustion. Use `--skip-profile-checks` to skip
 both, `--skip-rosalind-profile-check` for Rosalind, or `--skip-agy-check` for
 Antigravity. Model discovery and validation still run when the live check is skipped.
 
