@@ -20,6 +20,12 @@ Setup asks which integrations to install:
 | 4 | Use Codex from Codex — MCP tools and skill |
 | 5 | Use Antigravity (`agy`) from Claude Code and Codex |
 
+Setup preselects integrations already registered with their hosts. For Rosalind
+and Antigravity, a registration in either host selects the shared option.
+You can toggle any choice or press `n` to clear the selection. Unchecking an
+integration skips it for this run; use the uninstall script to remove it.
+Explicit command-line installation flags select only the requested integrations.
+
 Toggle the choices you want, then press `c` to install. Select **1 and 2** for
 both delegation directions. Choose 3 to install the Rosalind server in both hosts.
 Choose 4 to let Codex delegate to a separate Codex worker that uses your default

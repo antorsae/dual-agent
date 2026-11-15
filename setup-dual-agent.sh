@@ -100,10 +100,26 @@ select_option() {
     fail "Unknown option: $1. Use --help for usage."
 }
 
+preselect_installed() {
+    local detected index
+    command -v node >/dev/null 2>&1 || return 0
+    local claude_config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+    if ! detected="$(node "$SCRIPT_DIR/scripts/installed-integrations.mjs" "$claude_config" "${CODEX_HOME:-$HOME/.codex}" "${INTEGRATIONS[@]}")"; then
+        echo "Could not detect installed integrations; select them manually." >&2
+        return 0
+    fi
+    while IFS= read -r index; do
+        if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -lt "${#INTEGRATIONS[@]}" ]; then
+            SELECTED[$index]=1
+        fi
+    done <<< "$detected"
+}
+
 show_help() {
     local index
     echo "Usage: $0 [options]"
     echo "Without arguments, choose integrations from the installation menu."
+    echo "The menu preselects integrations already registered in either host."
     for index in "${!INTEGRATIONS[@]}"; do
         load_integration "$index"
         printf '  %-22s Use %s from %s\n' "$INTEGRATION_OPTION" "$INTEGRATION_LABEL" "$INTEGRATION_HOST_LABEL"
@@ -145,6 +161,8 @@ done
 echo -e "${BLUE}Dual Agent Environment Setup${NC}"
 if [ "$INSTALL_REQUESTED" -eq 0 ]; then
     INTERACTIVE_INSTALL=1
+    preselect_installed
+    echo "Existing integrations are preselected. Toggle any choice to change this run."
     echo "Live checks are enabled unless skipped; Antigravity tries the next model on quota exhaustion."
     while true; do
         echo "Select integrations (toggle a number, then continue):"
