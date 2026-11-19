@@ -9,6 +9,7 @@ export interface TaskRequest {
   type: TaskType;
   prompt: string;
   files?: string[];
+  models?: string[];
   cwd?: string;
   mode?: ExecutionMode;
   timeoutMs?: number;
@@ -32,6 +33,7 @@ export interface Job {
   scratch?: string;
   model?: string;
   models?: string[];
+  modelPrioritySource?: "configured" | "caller";
   attempts?: Array<{
     model: string;
     startedAt: string;

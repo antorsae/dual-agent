@@ -97,7 +97,18 @@ the previous process cleaned up before the next starts. The same prompt starts
 a fresh session on the next model; edit jobs stop if any tool has already started.
 Cancellation and non-quota errors stop the chain. Every job starts at the first
 model; there is no cached quota percentage or permanent model switch.
-`models` and `attempts` are persisted and returned alongside the actual `model`.
+`delegate_agy_models` reads the model catalog and native `/usage` snapshot on demand.
+The result contains `default_priority`, `available_models`, `quota_groups`,
+`checked_at`, and guidance for matching models to tasks. Groups and their membership
+descriptions come from the account. A failed lookup appears in `errors` with its
+corresponding data set to `null`. A missing remaining percentage means unknown.
+
+All four AGY task tools accept an optional ordered `models` array. The server
+checks caller-supplied IDs against `agy models` before creating a job. The list
+replaces the defaults for that job. A one-item list pins the job, and omitting
+the argument uses the configured order directly. Job status returns
+`model_priority_source` (`configured` or `caller`), the effective `models` list,
+the actual `model`, and the attempt history.
 Both log files retain all attempts, with model-start markers in stderr.
 
 ## Tool contract
@@ -113,6 +124,7 @@ The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `dele
 | `_status` | `task_id`, optional `wait_ms` from 0 to 30000 |
 | `_list` | optional `limit` from 1 to 100 (default 20) |
 | `_cancel` | `task_id` |
+| `_models` (Antigravity only) | none |
 
 Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. For Codex, Rosalind, and Antigravity, read-only preserves the workspace while allowing tests and experiments in per-job scratch. Unknown arguments and invalid values are errors before execution.
 

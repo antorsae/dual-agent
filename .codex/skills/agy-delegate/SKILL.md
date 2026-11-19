@@ -1,6 +1,6 @@
 ---
 name: agy-delegate
-description: Use Antigravity through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Antigravity runs natively through agy with the model priority selected during setup.
+description: Use Antigravity through MCP for an independent code review, plan critique, second opinion, debugging analysis, or a bounded implementation task. Antigravity runs natively through agy with a configurable model priority for each task.
 ---
 
 # Delegate to Antigravity
@@ -46,7 +46,12 @@ the work should stop.
 Leave `timeout_ms` unset unless the user asks for a limit: it kills the worker
 and discards its answer, and reviews can take from minutes to over an hour.
 
-The server tries the configured model priority on quota/rate-limit failures.
+Use the setup priority for routine tasks. When a review calls for deeper reasoning
+or quota is tight, call `delegate_agy_models` and choose from its live catalog.
+Use the task guidance and the remaining five-hour and weekly quota for each group.
+Pass an ordered `models` array on the task to select its full fallback order.
+A single ID in that array pins a requested reviewer. Omitting it uses the setup order.
+The server tries the selected priority on quota or rate-limit failures.
 Status reports `model`, `models`, and `attempts`; report the model that answered.
 Do not resubmit a job that is still trying its fallback models. Non-quota errors
 stop the chain, and edits are not replayed after a tool has started.

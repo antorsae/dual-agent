@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobStore.js";
 import { runProvider } from "./runner.js";
 import { createScratch } from "./scratch.js";
-import { parseAgyModels } from "./agyModels.mjs";
+import { selectAgyModels } from "./agySelection.js";
 import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, providerMatches, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -33,7 +33,8 @@ export class JobManager {
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new Error("timeout_ms must be an integer from 1 to 2147483647.");
     const project = await resolveProject(request.cwd);
-    const models = request.provider === "agy" ? parseAgyModels(process.env.AGY_MODELS ?? process.env.AGY_MODEL ?? "") : undefined;
+    if (request.models !== undefined && request.provider !== "agy") throw new Error("Only Antigravity accepts a models override.");
+    const models = request.provider === "agy" ? await selectAgyModels(request.models) : undefined;
     const model = models?.[0];
     if (this.closing) throw new Error("Delegation server is shutting down.");
     const job: Job = {
@@ -41,6 +42,7 @@ export class JobManager {
       prompt: request.prompt, files: request.files, ...project, mode, timeoutMs, model, models,
       status: "running", createdAt: new Date().toISOString(), owner: await this.owner, launching: false,
     };
+    if (models) job.modelPrioritySource = request.models === undefined ? "configured" : "caller";
     await this.store.create(job);
     try {
       if (mode === "read-only" && (isCodexProvider(job.provider) || job.provider === "agy")) {
@@ -132,7 +134,7 @@ export class JobManager {
         return result;
       }
       if (index + 1 === models.length) {
-        result.error = `All configured Antigravity models exhausted their quota/rate limit: ${models.join(" → ")}.`;
+        result.error = `All Antigravity models selected for this job exhausted their quota/rate limit: ${models.join(" → ")}.`;
         return result;
       }
       await this.store.write(job);

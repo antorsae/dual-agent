@@ -6,10 +6,12 @@ export const DEFAULT_AGY_MODELS = [
   "gemini-4-hydrogen-xhigh", "gemini-4-argon-high", "claude-opus-5-5-high",
 ];
 
+export const AGY_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
+
 /** @param {string} value */
 export function parseAgyModels(value) {
   const models = value.split(",").map(model => model.trim());
-  if (!models.length || models.some(model => !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(model))) {
+  if (models.some(model => !AGY_MODEL_ID.test(model))) {
     throw new Error("AGY_MODELS must be a comma-separated priority list of model IDs from agy models.");
   }
   return [...new Set(models)];
@@ -42,10 +44,22 @@ export function parseAgyError(line) {
   try { return JSON.parse(match[1]); } catch { return undefined; }
 }
 
+/** Parse the tab-separated ID and display label emitted by `agy models`.
+ * @param {string} output
+ * @returns {{ id: string, label: string }[]}
+ */
+export function parseAgyCatalog(output) {
+  const models = new Map();
+  for (const line of output.split(/\r?\n/)) {
+    const [id, label] = line.split("\t");
+    if (AGY_MODEL_ID.test(id) && label?.trim()) models.set(id, { id, label: label.trim() });
+  }
+  return [...models.values()];
+}
+
 /** @param {string} file */
 function catalogIds(file) {
-  return readFileSync(file, "utf8").split(/\r?\n/).filter(line => line.includes("\t"))
-    .map(line => line.split("\t")[0]).filter(id => /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(id));
+  return parseAgyCatalog(readFileSync(file, "utf8")).map(model => model.id);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

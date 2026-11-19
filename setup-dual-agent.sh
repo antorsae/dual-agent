@@ -458,4 +458,7 @@ for index in "${!INTEGRATIONS[@]}"; do
     for host in $INTEGRATION_HOSTS; do echo "Check registration: $host mcp get $INTEGRATION_PROVIDER-delegate"; done
 done
 if [ -n "$CLAUDE_WORKER_EFFORT" ]; then echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"; fi
-if [ "$NEED_AGY_WORKER" -eq 1 ]; then echo "Antigravity model priority: $DELEGATE_AGY_MODELS"; fi
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then
+    echo "Antigravity model priority: $DELEGATE_AGY_MODELS"
+    echo "Use delegate_agy_models to see model choices and account quota for a job."
+fi

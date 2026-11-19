@@ -2,6 +2,13 @@
 import { appendFileSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
+if (args[0] === "models" || args[0] === "--print=/usage") {
+  if (process.env.FAKE_AGY_INFO_LOG) appendFileSync(process.env.FAKE_AGY_INFO_LOG, JSON.stringify(args) + "\n");
+  const reply = args[0] === "models" ? process.env.FAKE_AGY_CATALOG : process.env.FAKE_AGY_USAGE;
+  if (reply === undefined) process.exit(2);
+  process.stdout.write(reply);
+  process.exit(0);
+}
 let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const provider = args.includes("--input-format") ? "agy" : args.includes("--print") ? "claude" : "codex";

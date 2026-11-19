@@ -3,6 +3,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { stat } from "node:fs/promises";
 import { JobManager } from "./jobs.js";
+import { agyModelOptions } from "./agySelection.js";
+import { AGY_MODEL_ID } from "./agyModels.mjs";
 import { formatDuration, notifyChannel } from "./notifications.js";
 import { ExecutionMode, isCodexProvider, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
 
@@ -52,7 +54,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ? " Before review, save required external notes and complete parent/submodule diffs inside the allowed worktree. Include new files. Tell the worker to review saved diffs plus source without external Git metadata or /tmp paths; keep read-only mode and existing permissions."
     : "";
   const modelGuidance = provider === "agy"
-    ? " Uses the configured model priority and falls back on model quota/rate-limit failures. Editing retries only before tools start. Status includes the actual model and attempt history."
+    ? " Omit models to use the setup priority. For a task-specific choice, call delegate_agy_models for task guidance, available IDs, and current quota, then pass an ordered models array. Quota failures try the next model. Editing retries only before tools start."
     : "";
   const enableChannel = options.enableChannel ?? provider !== "claude";
   const channelSource = options.channelSource ?? serverName;
@@ -78,6 +80,10 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const common = {
     cwd: { type: "string", description: "Optional absolute project directory. Defaults to CLAUDE_PROJECT_DIR, then the directory where the host launched this server. Pass explicitly to target another project. The resolved path is returned with the job." },
     files: { anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }], description: "Context file paths (an array, or a comma-separated string)." + contextGuidance },
+    ...(provider === "agy" ? { models: {
+      type: "array", minItems: 1, items: { type: "string", pattern: AGY_MODEL_ID.source },
+      description: "Optional complete model priority for this job. Use IDs from delegate_agy_models, including models outside the setup priority. One ID pins the model. Omit to use the configured order.",
+    } } : {}),
     mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." + scratchGuidance },
     wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
     timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: `Hard limit in milliseconds (default two hours) that kills the worker and discards its answer. Leave unset unless the user asks for a limit; reviews can take from minutes to over an hour. Bound your own waiting with ${prefix}_status wait_ms instead.` },
@@ -109,7 +115,13 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       type: "object" as const, additionalProperties: false, properties: { task_id: taskId }, required: ["task_id"],
     } },
   ];
-  const allTools = [...tools, ...managementTools];
+  const modelTools = provider === "agy" ? [{
+    name: "delegate_agy_models",
+    description: "Get available Antigravity model IDs, the configured job priority, task-fit guidance, and current quota by model group. Use this before choosing a model override. Runs AGY's catalog and native /usage commands.",
+    inputSchema: { type: "object" as const, additionalProperties: false, properties: {} },
+    annotations: { readOnlyHint: true },
+  }] : [];
+  const allTools = [...tools, ...managementTools, ...modelTools];
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: allTools }));
 
   async function response(job: Job) {
@@ -132,7 +144,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       `**Task ID**: ${job.id}`, `**Status**: ${job.status.toUpperCase()}${cancelRequested && !isFinished(job) ? " (cancellation requested)" : ""}`,
       `**Provider / Type / Mode**: ${job.provider} / ${job.type} / ${job.mode}`, `**Project**: ${job.cwd}`, `**Workspace**: ${job.workspace}`,
       ...(job.model ? [`**Model**: ${job.model}`] : []),
-      ...(job.models ? [`**Model priority**: ${job.models.join(" → ")}`] : []),
+      ...(job.models ? [`**Model priority**: ${job.models.join(" → ")}${job.modelPrioritySource === "caller" ? " (caller override)" : ""}`] : []),
       ...(job.attempts?.length ? [`**Model attempts**: ${job.attempts.map(attempt => `${attempt.model}: ${attempt.status}`).join("; ")}`] : []),
       `**Created**: ${job.createdAt}`, `**${isFinished(job) ? "Duration" : "Elapsed"}**: ${elapsed}`,
       `**Output bytes**: ${bytes[0]} stdout, ${bytes[1]} stderr${activity}`,
@@ -144,7 +156,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ].join("\n");
     return {
       content: [{ type: "text" as const, text }],
-      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, model: job.model, models: job.models, attempts: job.attempts, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
+      structuredContent: { task_id: job.id, status: job.status, provider: job.provider, model: job.model, models: job.models, model_priority_source: job.models ? job.modelPrioritySource ?? "configured" : undefined, attempts: job.attempts, mode: job.mode, cwd: job.cwd, workspace: job.workspace, error: job.error, session_id: job.sessionId, paths, cancel_requested: cancelRequested, output: excerpt, truncated: output.length > excerpt.length },
       isError: job.status === "failed" || job.status === "interrupted",
     };
   }
@@ -157,6 +169,10 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       if (!tool) throw new Error(`Unknown tool: ${name}`);
       const allowed = Object.keys(tool.inputSchema.properties);
       for (const key of Object.keys(args)) if (!allowed.includes(key)) throw new Error(`Unknown argument: ${key}`);
+      if (name === "delegate_agy_models") {
+        const options = await agyModelOptions();
+        return { content: [{ type: "text", text: JSON.stringify(options) }], structuredContent: options };
+      }
       if (name === `${prefix}_list`) {
         const jobs = await manager.list(provider, numberArg(args, "limit", 20, 1, 100));
         return { content: [{ type: "text", text: jobs.length ? jobs.map(job => `${job.id} | ${job.status} | ${job.type} | ${job.mode} | ${job.cwd} | ${job.prompt.replace(/\s+/g, " ").slice(0, 120)}`).join("\n") : `No ${label} jobs.` }], structuredContent: { jobs: jobs.map(({ id, status, type, mode, cwd, createdAt, prompt }) => ({ task_id: id, status, type, mode, cwd, created_at: createdAt, prompt: prompt.slice(0, 120) })) } };
@@ -166,9 +182,10 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       const [, type] = kinds.find(([suffix]) => prefix + suffix === name)!;
       const mode = stringArg(args, "mode") as ExecutionMode | undefined;
       const wait = booleanArg(args, "wait");
+      if (args.models !== undefined && !Array.isArray(args.models)) throw new Error("models must be an ordered array of model IDs.");
       const job = await manager.submit({
         provider, type, prompt: stringArg(args, type === "plan-review" ? "plan" : "prompt", true)!,
-        cwd: stringArg(args, "cwd"), files: filesArg(args), mode,
+        cwd: stringArg(args, "cwd"), files: filesArg(args), models: args.models, mode,
         timeoutMs: numberArg(args, "timeout_ms", 7200000, 1, 2147483647),
       });
       return response(wait ? await manager.wait(job.id, job.timeoutMs + 5000, provider) : job);

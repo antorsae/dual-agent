@@ -84,6 +84,18 @@ without fallback. Setup saves the priority in both host registrations and checks
 every selected ID against the live catalog. Existing single-model registrations
 keep their selection until setup is rerun with a new list.
 
+The calling agent can use `delegate_agy_models` to see the live catalog, the
+configured order, model selection guidance, and the remaining quota and reset times
+for each group. On any AGY task it can pass `models` to choose the full order for
+that job, including models available outside the setup list. A one-item list pins
+the job to that model. Omitting `models` uses the setup priority. [Antigravity quota groups](https://antigravity.google/docs/cli/commands/usage/)
+
+For example, a caller reviewing a concurrency change could use `delegate_agy_review` with
+
+```json
+{"prompt": "Review the lock handoff for races.", "models": ["gemini-4-neon-xhigh", "claude-opus-5-5-high"]}
+```
+
 Each AGY job starts with the first model. If AGY reports a model quota/rate-limit
 failure, it tries the next model in order, once per model. It stops on other
 errors, cancellation, or the original job timeout. Read-only work can restart on
@@ -114,7 +126,7 @@ are preserved. The former `--gemini-mcp` flag is an alias for `--agy-mcp`.
 | Recent jobs | `delegate_codex_list` | `delegate_claude_list` |
 | Cancellation | `delegate_codex_cancel` | `delegate_claude_cancel` |
 
-Rosalind and Antigravity expose the same seven tools in both hosts:
+Rosalind and Antigravity expose these tools in both hosts.
 
 | Task | Rosalind | Antigravity |
 |------|------------------|------------|
@@ -125,6 +137,7 @@ Rosalind and Antigravity expose the same seven tools in both hosts:
 | Status and result | `delegate_rosalind_status` | `delegate_agy_status` |
 | Recent jobs | `delegate_rosalind_list` | `delegate_agy_list` |
 | Cancellation | `delegate_rosalind_cancel` | `delegate_agy_cancel` |
+| Model selection and quota | — | `delegate_agy_models` |
 
 Rosalind runs the selected `codex-pool` or `codex` executable with the
 `-p rosalind_delegate` profile. Antigravity runs `agy` directly with the selected `--model`.

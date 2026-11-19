@@ -173,16 +173,22 @@ test("Antigravity shares edit locks, accepts cancellation across hosts, and reco
   assert.match(failed.structuredContent.error, /Antigravity exited with code 7/);
 });
 
-test("Antigravity discovers seven native tools, pins its model, and runs reviews from scratch", async t => {
+test("Antigravity advertises model discovery and per-task selection, and runs reviews from scratch", async t => {
   const f = await fixture(t);
   const c = await f.connect("agy", {}, f.project);
   const discovery = await c.client.listTools();
-  assert.deepEqual(discovery.tools.map(tool => tool.name).sort(), ["", "_review", "_implement", "_plan_review", "_status", "_list", "_cancel"].map(suffix => "delegate_agy" + suffix).sort());
+  assert.deepEqual(discovery.tools.map(tool => tool.name).sort(), ["", "_review", "_implement", "_plan_review", "_status", "_list", "_cancel", "_models"].map(suffix => "delegate_agy" + suffix).sort());
+  for (const suffix of ["", "_review", "_implement", "_plan_review"]) {
+    const tool = discovery.tools.find(tool => tool.name === `delegate_agy${suffix}`);
+    assert.equal(tool.inputSchema.properties.models.type, "array");
+    assert.match(tool.description, /delegate_agy_models/);
+  }
   assert.match(discovery.tools.find(tool => tool.name === "delegate_agy_review").description, /save required external notes and complete parent\/submodule diffs inside the allowed worktree/);
   const result = await c.call("_review", { prompt: "[slow] Review quotes ' and\nnewlines", cwd: f.project, wait: true });
   const job = result.structuredContent;
   assert.equal(job.status, "completed", text(result));
   assert.equal(job.model, "fixture-model");
+  assert.equal(job.model_priority_source, "configured");
   assert.equal(job.session_id, "fixture-agy-session");
   const request = (await f.requests()).at(-1);
   assert.equal(request.cwd, job.paths.scratch);
@@ -252,6 +258,97 @@ test("Antigravity requires a selected model and preserves legacy Gemini job resu
   assert.ok((await c.call("_list", {})).structuredContent.jobs.some(job => job.task_id === id));
 });
 
+const selectionCatalog = ["gemini-4-neon-xhigh\tGemini 4 Neon (XHigh)", "claude-opus-5-5-high\tClaude Opus 5.5 (High)"].join("\n");
+const selectionUsage = JSON.stringify({
+  status: "SUCCESS", command: { name: "usage", data: { groups: [
+    { name: "Gemini Models", description: "Models within this group: Gemini 4 Neon, Gemini 4 Hydrogen", buckets: [
+      { window: "weekly", remaining_fraction: 0, reset_time: "2026-11-26T09:09:59Z" }, { window: "5h", remaining_fraction: 0.875 },
+    ] },
+    { name: "Claude and GPT models", buckets: [{ window: "weekly", remaining_fraction: 1 }, { window: "5h" }] },
+  ] } },
+});
+
+test("AGY model discovery returns the account catalog and quota groups to both hosts without creating a job", async t => {
+  const f = await fixture(t);
+  for (const host of ["codex", "claude"]) {
+    const c = await f.connect("agy", { FAKE_AGY_CATALOG: selectionCatalog, FAKE_AGY_USAGE: selectionUsage }, f.project, host);
+    const result = await c.call("_models", {});
+    const info = result.structuredContent;
+    assert.deepEqual(JSON.parse(text(result)), info);
+    assert.ok(Number.isFinite(Date.parse(info.checked_at)));
+    assert.deepEqual(info.default_priority, ["fixture-model"]);
+    assert.deepEqual(info.available_models.map(model => model.id), ["gemini-4-neon-xhigh", "claude-opus-5-5-high"]);
+    assert.match(info.quota_groups[0].description, /Gemini 4 Hydrogen/);
+    assert.deepEqual(info.quota_groups[0].limits.map(limit => limit.remaining_percent), [0, 87.5]);
+    assert.equal(info.quota_groups[0].limits[0].resets_at, "2026-11-26T09:09:59Z");
+    assert.deepEqual(info.quota_groups[1].limits.map(limit => limit.remaining_percent), [100, null]);
+    assert.ok(info.guidance.some(line => line.includes("Opus") && line.includes("Neon")));
+  }
+  assert.deepEqual(await f.store.ids(), []);
+  assert.deepEqual(await f.requests(), []);
+});
+
+test("caller-selected AGY models control retries for one job while a concurrent job uses the saved order", async t => {
+  const f = await fixture(t);
+  const neon = "gemini-4-neon-xhigh", opus = "claude-opus-5-5-high";
+  const infoLog = join(f.root, "info.jsonl");
+  const c = await f.connect("agy", { FAKE_AGY_CATALOG: selectionCatalog, FAKE_AGY_QUOTA_MODELS: neon, FAKE_AGY_INFO_LOG: infoLog }, f.project, "codex");
+  const [override, normal] = await Promise.all([
+    c.call("_review", { prompt: "review the diff", models: [neon, opus], wait: true }),
+    c.call("_plan_review", { plan: "review the plan", wait: true }),
+  ]);
+  const job = override.structuredContent;
+  assert.equal(job.status, "completed", text(override));
+  assert.equal(job.model_priority_source, "caller");
+  assert.deepEqual(job.models, [neon, opus]);
+  assert.deepEqual(job.attempts.map(({ model, status }) => [model, status]), [[neon, "quota-exhausted"], [opus, "completed"]]);
+  assert.equal(job.model, opus);
+  assert.equal(normal.structuredContent.model_priority_source, "configured");
+  assert.deepEqual(normal.structuredContent.models, ["fixture-model"]);
+  const recovered = await c.call("_status", { task_id: job.task_id });
+  assert.deepEqual(recovered.structuredContent.models, [neon, opus]);
+  assert.equal(recovered.structuredContent.model_priority_source, "caller");
+  const pinned = await c.call("_implement", { prompt: "edit", models: [neon], wait: true });
+  assert.equal(pinned.structuredContent.status, "failed");
+  assert.deepEqual(pinned.structuredContent.attempts.map(attempt => attempt.model), [neon]);
+  assert.deepEqual((await readFile(infoLog, "utf8")).trim().split("\n").map(line => JSON.parse(line)), [["models"], ["models"]]);
+});
+
+test("invalid caller models are rejected before creating a job, and the option is AGY-only", async t => {
+  const f = await fixture(t);
+  const c = await f.connect("agy", { FAKE_AGY_CATALOG: selectionCatalog }, f.project);
+  for (const models of [null, [], "gemini-4-neon-xhigh", [1], [""], ["--model"], ["a,b"], ["gemini-4-neon-xhigh", "unlisted"]]) {
+    const result = await c.call("", { prompt: "test", models });
+    assert.equal(result.isError, true, text(result));
+    assert.match(text(result), /model/i);
+  }
+  const other = await f.connect("codex", {}, f.project);
+  const tools = (await other.client.listTools()).tools;
+  assert.ok(tools.every(tool => !tool.inputSchema.properties.models && !tool.name.endsWith("_models")));
+  const rejected = await other.call("_review", { prompt: "test", models: ["gemini-4-neon-xhigh"] });
+  assert.match(text(rejected), /Unknown argument: models/);
+  assert.deepEqual(await f.store.ids(), []);
+  assert.deepEqual(await f.requests(), []);
+});
+
+test("AGY handles unavailable quota or catalog independently", async t => {
+  const f = await fixture(t);
+  const noQuota = await f.connect("agy", { FAKE_AGY_CATALOG: selectionCatalog }, f.project);
+  const partial = (await noQuota.call("_models", {})).structuredContent;
+  assert.equal(partial.quota_groups, null);
+  assert.ok(partial.errors.quota_groups);
+  assert.equal(partial.available_models.length, 2);
+  const override = await noQuota.call("", { prompt: "test", models: ["gemini-4-neon-xhigh"], wait: true });
+  assert.equal(override.structuredContent.status, "completed");
+  const noCatalog = await f.connect("agy", { FAKE_AGY_USAGE: selectionUsage }, f.project);
+  const quotaOnly = (await noCatalog.call("_models", {})).structuredContent;
+  assert.equal(quotaOnly.available_models, null);
+  assert.ok(quotaOnly.errors.available_models);
+  assert.equal(quotaOnly.quota_groups.length, 2);
+  assert.equal((await noCatalog.call("", { prompt: "test", models: ["gemini-4-neon-xhigh"] })).isError, true);
+  assert.equal((await noCatalog.call("", { prompt: "test", wait: true })).structuredContent.model, "fixture-model");
+});
+
 for (const marker of ["", "[stderr-quota]"]) {
   test(`Antigravity falls back in order on quota exhaustion ${marker}`, async t => {
     const f = await fixture(t);
@@ -282,7 +379,7 @@ test("Antigravity stops once every model is exhausted and retains diagnostics", 
   const c = await f.connect("agy", { AGY_MODELS: "hydrogen,argon", FAKE_AGY_QUOTA_MODELS: "hydrogen,argon" }, f.project);
   const result = await c.call("_review", { prompt: "review", wait: true });
   assert.equal(result.structuredContent.status, "failed");
-  assert.match(result.structuredContent.error, /All configured Antigravity models exhausted/);
+  assert.match(result.structuredContent.error, /All Antigravity models selected for this job exhausted/);
   assert.equal((await f.requests()).length, 2);
   assert.equal(result.structuredContent.output, "partial result");
 });
