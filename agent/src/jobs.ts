@@ -3,7 +3,7 @@ import { atomicWrite, JobStore, processIdentity, resolveProject } from "./jobSto
 import { runProvider } from "./runner.js";
 import { createScratch } from "./scratch.js";
 import { selectAgyModels } from "./agySelection.js";
-import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, Job, JobStatus, providerLabel, providerMatches, Provider, TaskRequest } from "./tasks.js";
+import { DEFAULT_TIMEOUT_MS, isCodexProvider, isFinished, isReview, Job, JobStatus, providerLabel, providerMatches, Provider, TaskRequest } from "./tasks.js";
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 interface ActiveJob {
@@ -19,8 +19,11 @@ export class JobManager {
   private closing = false;
 
   constructor(root?: string, private readonly onDiagnostic?: (text: string) => void,
-    private readonly onComplete?: (job: Job) => void) {
+    private readonly onComplete?: (job: Job) => void, private readonly reviewsOnly = false) {
     this.store = new JobStore(root);
+  }
+  private accepts(type: Job["type"], mode: Job["mode"]): boolean {
+    return !this.reviewsOnly || (isReview(type) && mode === "read-only");
   }
   async submit(request: TaskRequest): Promise<Job> {
     if (this.closing) throw new Error("Delegation server is shutting down.");
@@ -29,6 +32,7 @@ export class JobManager {
     if (typeof request.prompt !== "string" || !request.prompt.trim()) throw new Error("A nonempty prompt is required.");
     const mode = request.mode ?? (request.type === "implement" ? "edit" : "read-only");
     if (!["read-only", "edit"].includes(mode)) throw new Error("mode must be read-only or edit.");
+    if (!this.accepts(request.type, mode)) throw new Error("This registration accepts read-only code and plan reviews.");
     if (request.files && (!Array.isArray(request.files) || request.files.some(file => typeof file !== "string" || !file.trim()))) throw new Error("files must contain nonempty paths.");
     const timeoutMs = request.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2147483647) throw new Error("timeout_ms must be an integer from 1 to 2147483647.");
@@ -144,6 +148,7 @@ export class JobManager {
   async get(id: string, provider?: Provider): Promise<Job> {
     const job = await this.store.read(id);
     if (provider && !providerMatches(job.provider, provider)) throw new Error(`Task ${id} belongs to ${job.provider}, not ${provider}.`);
+    if (!this.accepts(job.type, job.mode)) throw new Error(`Task ${id} is outside this registration's read-only reviews.`);
     return this.store.reconcile(job);
   }
   async wait(id: string, waitMs: number, provider?: Provider): Promise<Job> {
@@ -168,6 +173,7 @@ export class JobManager {
     for (const id of await this.store.ids()) {
       try {
         const job = await this.store.read(id);
+        if (!this.accepts(job.type, job.mode)) continue;
         if (!provider || providerMatches(job.provider, provider)) jobs.push(await this.store.reconcile(job));
       } catch (error) { console.error(`[dual-agent] Cannot read ${id}: ${error}`); }
     }

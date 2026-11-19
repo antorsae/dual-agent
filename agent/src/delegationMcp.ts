@@ -6,7 +6,7 @@ import { JobManager } from "./jobs.js";
 import { agyModelOptions } from "./agySelection.js";
 import { AGY_MODEL_ID } from "./agyModels.mjs";
 import { formatDuration, notifyChannel } from "./notifications.js";
-import { ExecutionMode, isCodexProvider, isFinished, Job, providerLabel, Provider, TaskType } from "./tasks.js";
+import { ExecutionMode, isCodexProvider, isFinished, isReview, Job, providerLabel, Provider, TaskType } from "./tasks.js";
 
 const MAX_RESULT_CHARS = 64000;
 const stringArg = (args: Record<string, unknown>, key: string, required = false): string | undefined => {
@@ -38,12 +38,13 @@ export interface DelegationServerOptions {
   toolPrefix?: string;
   label?: string;
   enableChannel?: boolean;
+  reviewsOnly?: boolean;
   channelSource?: string;
 }
 
 export async function serveDelegation(providerOrOptions: Provider | DelegationServerOptions): Promise<void> {
   const options = typeof providerOrOptions === "string" ? { provider: providerOrOptions } : providerOrOptions;
-  const { provider } = options;
+  const { provider, reviewsOnly = false } = options;
   const serverName = options.serverName ?? `${provider}-delegate`;
   const prefix = options.toolPrefix ?? `delegate_${provider}`;
   const label = options.label ?? providerLabel(provider);
@@ -59,6 +60,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
   const enableChannel = options.enableChannel ?? provider !== "claude";
   const channelSource = options.channelSource ?? serverName;
   const statusGuidance = `Use ${prefix}_status with the task_id and wait_ms=30000 until the job finishes.`;
+  const reviewInstructions = `Request a read-only ${label} code or plan review. Pass the AGY project's absolute path as cwd. ${statusGuidance} Inspect the saved answer when the job finishes.`;
   const completionGuidance = (enableChannel
     ? `If this session explicitly enabled the ${channelSource} channel, await its completion event while doing independent work, then fetch the result with ${prefix}_status. ` +
       `If channel delivery is unavailable or uncertain: ${statusGuidance}`
@@ -71,11 +73,11 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       ? `${label} jobs emit one-way <channel source="${channelSource}" task_id="..." task_type="..." status="completed|failed|cancelled|interrupted" duration="..."> events. ` +
         `When one arrives, call ${prefix}_status with its task_id and present the saved result unless already collected. No reply to the channel is expected. ` +
         "Events are best effort and are not replayed after reconnecting; use status to recover saved results. " + completionGuidance
-      : undefined,
+      : reviewsOnly ? reviewInstructions : undefined,
   });
   const manager = new JobManager(undefined, undefined, job => {
     if (enableChannel) void notifyChannel(server, job, { source: channelSource, toolPrefix: prefix });
-  });
+  }, reviewsOnly);
   await manager.store.init();
   const common = {
     cwd: { type: "string", description: "Optional absolute project directory. Defaults to CLAUDE_PROJECT_DIR, then the directory where the host launched this server. Pass explicitly to target another project. The resolved path is returned with the job." },
@@ -84,7 +86,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
       type: "array", minItems: 1, items: { type: "string", pattern: AGY_MODEL_ID.source },
       description: "Optional complete model priority for this job. Use IDs from delegate_agy_models, including models outside the setup priority. One ID pins the model. Omit to use the configured order.",
     } } : {}),
-    mode: { type: "string", enum: ["read-only", "edit"], description: "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace." + scratchGuidance },
+    mode: { type: "string", enum: reviewsOnly ? ["read-only"] : ["read-only", "edit"], description: (reviewsOnly ? "Reviews run in read-only mode." : "Defaults to read-only, except implementation tools default to edit. Only one editing job may own a workspace.") + scratchGuidance },
     wait: { type: "boolean", description: `Wait for the final answer in this call. Default false: return a persistent task ID. ${completionGuidance}` },
     timeout_ms: { type: "integer", minimum: 1, maximum: 2147483647, description: `Hard limit in milliseconds (default two hours) that kills the worker and discards its answer. Leave unset unless the user asks for a limit; reviews can take from minutes to over an hour. Bound your own waiting with ${prefix}_status wait_ms instead.` },
   };
@@ -94,7 +96,7 @@ export async function serveDelegation(providerOrOptions: Provider | DelegationSe
     ["_plan_review", "plan-review", `Ask ${label} to critique a plan or architecture, uncover missing cases, and suggest improvements. Use for an independent second opinion before a complex change. Defaults to read-only.`],
     ["", "custom", `Ask ${label} to perform any task using the supplied prompt and project context. The prompt is supplied per call, not fixed. Useful for independent analysis, debugging, or a second opinion. Defaults to read-only; explicitly select edit for changes.`],
   ];
-  const tools = kinds.map(([suffix, type, description]) => ({
+  const tools = kinds.filter(([, type]) => !reviewsOnly || isReview(type)).map(([suffix, type, description]) => ({
     name: prefix + suffix,
     description: description + modelGuidance + (type !== "implement" ? scratchGuidance + contextGuidance : "") + ` Returns a durable job and final result or task ID. ${completionGuidance}`,
     inputSchema: {

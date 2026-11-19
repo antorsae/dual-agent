@@ -5,8 +5,8 @@ select_agy_model() {
     local requested="${AGY_MODELS:-${AGY_MODEL:-}}" saved defaults selection default_numbers=""
     local policy="$SCRIPT_DIR/agent/src/agyModels.mjs"
     local -a ids=() labels=() selected=() numbers=()
-    saved="$(codex_registration_env agy-delegate AGY_MODELS)"
-    if [ -z "$saved" ]; then saved="$(codex_registration_env agy-delegate AGY_MODEL)"; fi
+    saved="$(saved_worker_env agy-delegate AGY_MODELS)"
+    if [ -z "$saved" ]; then saved="$(saved_worker_env agy-delegate AGY_MODEL)"; fi
     if ! "$DELEGATE_AGY_BIN" models > "$catalog" 2>> "$INSTALL_LOG"; then
         fail "Could not list Antigravity models. Authenticate with agy and rerun setup."
     fi

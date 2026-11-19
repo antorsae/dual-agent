@@ -73,7 +73,11 @@ Provider settings and project instructions remain native to the installed CLIs. 
 
 ## Host discovery and prompts
 
-`codex-delegate` exposes Codex tools to Claude Code and, optionally, to Codex; `claude-delegate` exposes Claude tools to Codex. `rosalind-delegate` selects the `rosalind_delegate` Codex profile. `agy-delegate` runs native Antigravity with the model selected during setup. Both expose the same tools to both hosts. Each has review, implementation, plan-review, custom, status, list, and cancel tools.
+`codex-delegate` exposes Codex tools to Claude Code and, optionally, to Codex; `claude-delegate` exposes Claude tools to Codex. `rosalind-delegate` selects the `rosalind_delegate` Codex profile. `agy-delegate` runs native Antigravity with the model selected during setup. Claude Code and Codex use full delegation tools for the worker cells they select.
+The AGY TUI can select any of the four workers in its own grid row. Its MCP entrypoint
+serves code and plan reviews and scopes submission, status, list, and cancellation
+to the worker's read-only review jobs. It uses bounded status waits. AGY workers
+retain the native session's MCP deny rule to prevent recursive delegation.
 
 A plain Codex worker passes no profile, so it uses the default configuration rather than the calling session's profile. Codex starts stdio MCP servers with a minimal environment, so the Codex-hosted Codex and Rosalind registrations list provider API key variables in `env_vars`.
 

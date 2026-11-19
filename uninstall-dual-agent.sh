@@ -14,12 +14,15 @@ CLAUDE_SERVERS=()
 CODEX_SERVERS=()
 
 remove_server() {
-    local host="$1" server="$2" config="$HOME/.claude.json" updated
+    local host="$1" server="$2" config="" updated cli="$1"
     local -a args=(mcp remove "$server")
-    if [ "$host" = "claude" ]; then args+=(--scope user); fi
-    if "$host" "${args[@]}" 2>/dev/null; then
+    case "$host" in
+        claude) config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"; args+=(--scope user) ;;
+        agy) cli="${AGY_BIN:-agy}"; config="$HOME/.gemini/config/mcp_config.json" ;;
+    esac
+    if "$cli" "${args[@]}" 2>/dev/null; then
         echo -e "  ${GREEN}[OK]${NC} Removed $server from $host"
-    elif [ "$host" = "claude" ] && [ -f "$config" ] && command -v jq >/dev/null &&
+    elif [ -s "$config" ] && command -v jq >/dev/null &&
         jq -e --arg server "$server" '.mcpServers[$server]' "$config" >/dev/null 2>&1; then
         updated=$(jq --arg server "$server" 'del(.mcpServers[$server])' "$config")
         printf '%s\n' "$updated" > "$config"
@@ -45,16 +48,15 @@ remove_skills() {
 
 echo -e "${BLUE}Dual Agent Environment Uninstall${NC}"
 echo -e "${YELLOW}Removing MCP servers...${NC}"
-for index in "${!INTEGRATIONS[@]}"; do
-    load_integration "$index"
+for index in "${!CELLS[@]}"; do
+    [ -n "${CELLS[$index]}" ] || continue
+    load_cell "$index"
     server="$INTEGRATION_PROVIDER-delegate"
-    for host in $INTEGRATION_HOSTS; do
-        remove_server "$host" "$server"
-        case "$host" in
-            claude) CLAUDE_SERVERS+=("$server") ;;
-            codex) CODEX_SERVERS+=("$server") ;;
-        esac
-    done
+    remove_server "$INTEGRATION_HOST" "$server"
+    case "$INTEGRATION_HOST" in
+        claude) CLAUDE_SERVERS+=("$server") ;;
+        codex) CODEX_SERVERS+=("$server") ;;
+    esac
 done
 
 # Include the former Gemini integration during migration and uninstall.
@@ -67,6 +69,7 @@ CODEX_SERVERS+=(gemini-delegate)
 CLAUDE_SKILLS=("${CLAUDE_SERVERS[@]}" codex-read codex-status codex-implement codex-plan-review codex-review)
 CODEX_SKILLS=("${CODEX_SERVERS[@]}" claude-status read-task respond)
 echo -e "${YELLOW}Removing host skills...${NC}"
+remove_skills "$HOME/.gemini/antigravity-cli/skills" dual-agent-review
 remove_skills "$HOME/.claude/skills" "${CLAUDE_SKILLS[@]}"
 remove_skills "${CODEX_HOME:-$HOME/.codex}/skills" "${CODEX_SKILLS[@]}"
 for codex_dir in "$HOME"/.codex*/; do
@@ -94,5 +97,5 @@ if .permissions.allow then .permissions.allow -= [
 fi
 
 echo -e "${GREEN}Uninstall Complete!${NC}"
-echo "Removed $REMOVED items. Restart Claude Code and Codex to unload MCP tools."
+echo "Removed $REMOVED items. Restart the affected hosts to unload MCP tools."
 echo "Saved task results and project files were preserved."

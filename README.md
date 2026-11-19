@@ -1,39 +1,35 @@
 # Dual Agent Development Environment
 
-Let **Claude Code delegate to Codex**, **Codex delegate to Claude** or to a separate Codex worker, and either host delegate to **Rosalind** through a Codex profile or **Antigravity** through the native `agy` CLI. Each task has its own prompt, project directory, execution mode, saved result, and cancellation control.
+Use **Claude Code**, **Codex**, or the **Antigravity TUI** to request independent reviews. Claude Code and Codex also support delegated implementation and custom tasks. Each job has its own prompt, project directory, saved result, and cancellation control.
 
 ## Installation
 
-Install Node.js with npm, Claude Code, and Codex CLI. Authenticate both CLIs, then run:
+Install Node.js with npm and authenticate the CLIs you want to use as callers or workers. Run `./setup-dual-agent.sh` to open the grid. Each cell selects one worker for one caller. Existing registrations appear checked in their own row.
+
+| Caller | Codex worker | Claude worker | Rosalind worker | AGY worker |
+|---|---|---|---|---|
+| Claude Code | Delegation | — | Delegation | Delegation |
+| Codex | Delegation | Delegation | Delegation | Delegation |
+| AGY TUI | Read-only reviews | Read-only reviews | Read-only reviews | Read-only reviews |
+
+Use the arrow keys to move, **Space** to toggle a cell, **r** to toggle its row,
+**a** to select all supported cells, and **n** to clear the selection. Press
+**Enter** to install the checked cells. Clearing a cell skips it for this run.
+Removal is a separate action through the uninstall script.
+
+For example, this installs three reviewers in the AGY TUI:
 
 ```bash
-./setup-dual-agent.sh
+./setup-dual-agent.sh --for agy=codex,claude,rosalind
 ```
 
-Setup asks which integrations to install:
+The AGY TUI exposes code and plan reviews plus status, list, and cancel for those
+reviews. Selecting the AGY worker in that row also enables `delegate_agy_models`
+for a second opinion with a different model. Worker settings and live checks run
+once per selected worker across the grid.
 
-| Choice | Integration |
-|--------|-------------|
-| 1 | Use Codex from Claude Code — MCP tools and skill |
-| 2 | Use Claude from Codex — MCP tools and skill |
-| 3 | Use Rosalind (Codex profile) from Claude Code and Codex |
-| 4 | Use Codex from Codex — MCP tools and skill |
-| 5 | Use Antigravity (`agy`) from Claude Code and Codex |
-
-Setup preselects integrations already registered with their hosts. For Rosalind
-and Antigravity, a registration in either host selects the shared option.
-You can toggle any choice or press `n` to clear the selection. Unchecking an
-integration skips it for this run; use the uninstall script to remove it.
-Explicit command-line installation flags select only the requested integrations.
-
-Toggle the choices you want, then press `c` to install. Select **1 and 2** for
-both delegation directions. Choose 3 to install the Rosalind server in both hosts.
-Choose 4 to let Codex delegate to a separate Codex worker that uses your default
-Codex configuration, for example from a session started with another profile.
-Choose 5 to use native Antigravity. Setup asks which model from `agy models` to use.
-Each delegation choice installs its MCP server registration and host skill.
-
-Restart Claude Code and Codex to discover the tools and their companion skills. You can describe the work normally:
+Restart the selected callers to discover the tools and their companion skills.
+You can describe the work normally.
 
 ```text
 Get an independent review of this authentication change.
@@ -67,7 +63,7 @@ Rosalind setup requires the Codex profile file
 `~/.codex/rosalind_delegate.config.toml`). Setup preserves the existing profile.
 
 Antigravity setup requires the native `agy` CLI. Sign in once with `agy`, then
-choose integration 5 or run `./setup-dual-agent.sh --agy-mcp` in a terminal.
+select an Antigravity worker cell or run `./setup-dual-agent.sh --agy-mcp` in a terminal.
 Setup lists the models returned by `agy models` and asks for model numbers in
 priority order, such as `4,2,7`. The initial default is **Hydrogen XHigh → Argon
 High → Opus 5.5 High**, using the available models from that list. Reruns retain
@@ -80,7 +76,7 @@ agy models
 
 `AGY_MODELS` accepts the same comma-separated priority list; `AGY_BIN` selects the
 executable. `--agy-model MODEL_ID` or legacy `AGY_MODEL` selects a single model
-without fallback. Setup saves the priority in both host registrations and checks
+without fallback. Setup saves the priority in the selected host registrations and checks
 every selected ID against the live catalog. Existing single-model registrations
 keep their selection until setup is rerun with a new list.
 
@@ -126,7 +122,7 @@ are preserved. The former `--gemini-mcp` flag is an alias for `--agy-mcp`.
 | Recent jobs | `delegate_codex_list` | `delegate_claude_list` |
 | Cancellation | `delegate_codex_cancel` | `delegate_claude_cancel` |
 
-Rosalind and Antigravity expose these tools in both hosts.
+Rosalind and Antigravity expose these tools in Claude Code and Codex.
 
 | Task | Rosalind | Antigravity |
 |------|------------------|------------|
@@ -139,10 +135,16 @@ Rosalind and Antigravity expose these tools in both hosts.
 | Cancellation | `delegate_rosalind_cancel` | `delegate_agy_cancel` |
 | Model selection and quota | — | `delegate_agy_models` |
 
+In the AGY TUI, each registered worker exposes `delegate_<worker>_review`,
+`delegate_<worker>_plan_review`, `_status`, `_list`, and `_cancel`. The server
+enforces read-only submissions and limits job management to read-only reviews
+for that worker. Pass the absolute project `cwd` and collect results with
+`_status`. The CLI skill `/dual-agent-review` describes the workflow.
+
 Rosalind runs the selected `codex-pool` or `codex` executable with the
 `-p rosalind_delegate` profile. Antigravity runs `agy` directly with the selected `--model`.
 
-Choice 4 adds the same `delegate_codex_*` tools to Codex. Plain Codex workers
+Selecting the Codex worker in the Codex row adds the `delegate_codex_*` tools to Codex. Plain Codex workers
 get no `-p` option, so they use the default configuration in the registered
 `CODEX_HOME`, whichever profile the calling session uses.
 
@@ -264,7 +266,8 @@ These explicit options skip the interactive questions:
 
 | Option | Installs |
 |--------|----------|
-| `--both` | Both delegation MCP servers and their host skills |
+| `--for HOST=WORKER,WORKER` | The listed workers for one caller. Repeat for additional callers. |
+| `--both` | Codex in Claude Code and Claude in Codex |
 | `--codex-mcp` (or `--mcp`) | Codex delegation for Claude Code |
 | `--claude-mcp` | Claude delegation for Codex |
 | `--rosalind-mcp` | Rosalind delegation for Claude Code and Codex |
@@ -300,9 +303,10 @@ codex mcp get claude-delegate
 codex mcp get codex-delegate
 codex mcp get rosalind-delegate
 codex mcp get agy-delegate
+agy mcp list
 ```
 
-Claude's user-scope registration is managed in `~/.claude.json`; Codex's is in its config directory. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).
+Claude Code stores user registrations in `~/.claude.json`, Codex in its config directory, and the AGY TUI in `~/.gemini/config/mcp_config.json`. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).
 
 For a blocked edit, inspect the active job and cancel it if appropriate. After an interrupted process, inspect existing changes before retrying. The lock remains if a worker might still be alive or its termination is unknown; recovery does not kill processes based on stored PIDs. Corrupt locks and interrupted lock recovery require inspection rather than automatic deletion.
 
@@ -323,7 +327,7 @@ npm test
 Tests use fake agent executables and temporary state directories. They do not submit model requests or alter actual MCP registrations. Generated dependencies and build output are ignored by Git.
 
 Setup and uninstall share the integration catalog in [scripts/integrations.sh](scripts/integrations.sh).
-The catalog defines menu order, flags, providers, hosts, and profiles; shared functions handle registration, skills, and removal.
+The catalog defines the supported caller and worker cells, their order, and worker profiles. Setup and uninstall use the same cells for registration, skills, and removal.
 
 ## License
 

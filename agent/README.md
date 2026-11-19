@@ -1,6 +1,6 @@
 # Delegation servers and CLI
 
-`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. `rosalindMcp.ts` exposes a Codex profile and `agyMcp.ts` exposes native Antigravity to Claude Code, with `rosalindCodexMcp.ts` and `agyCodexMcp.ts` for Codex hosts. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
+`mcp.ts` exposes Codex delegation to Claude Code, and `codexCodexMcp.ts` exposes it to Codex. `claudeMcp.ts` exposes Claude delegation to Codex. `rosalindMcp.ts` exposes a Codex profile and `agyMcp.ts` exposes native Antigravity to Claude Code, with `rosalindCodexMcp.ts` and `agyCodexMcp.ts` for Codex hosts. `reviewMcp.ts` exposes a selected worker to the AGY TUI for read-only code and plan reviews. They all use `delegationMcp.ts`, `jobs.ts`, `jobStore.ts`, and `runner.ts` for the same request lifecycle, persistent results, and workspace locking.
 
 ## Build and registration
 
@@ -9,13 +9,11 @@ npm ci
 npm run build
 ```
 
-Run the repository's `./setup-dual-agent.sh` to choose integrations interactively.
-Choice 1 installs Codex delegation for Claude Code; choice 2 installs Claude
-delegation for Codex; choice 3 installs Rosalind delegation for both hosts;
-choice 4 installs Codex delegation for Codex; choice 5 installs native Antigravity for both hosts and asks which available model to use.
-Each includes the MCP registration and companion host skill. Select the choices
-you need, or use `--both` for the two original directions. For manual
-registration, use the same absolute state directory in all commands:
+Run `./setup-dual-agent.sh` from the repository root and select the workers
+for each caller in the grid. Use `--for agy=codex,claude,rosalind` to install
+those reviewers in the AGY TUI. Repeat `--for` for additional callers. Legacy
+flags such as `--both` select their original routes. For manual registration,
+use the same absolute state directory for all workers.
 
 ```bash
 claude mcp add --scope user codex-delegate \
@@ -52,6 +50,11 @@ codex mcp add agy-delegate \
   --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
   -- node /FULL/PATH/TO/agent/dist/agyCodexMcp.js
 
+agy mcp add --env CODEX_BIN=/absolute/path/to/codex-pool \
+  --env CODEX_HOME=/absolute/path/to/codex-home \
+  --env DUAL_AGENT_STATE_DIR=/absolute/path/to/dual-agent-state \
+  codex-delegate -- node /FULL/PATH/TO/agent/dist/reviewMcp.js codex
+
 codex mcp add codex-delegate \
   --env CODEX_BIN=codex-pool \
   --env CODEX_HOME=/absolute/path/to/codex-home \
@@ -77,7 +80,7 @@ and sends one live request through it by default.
 
 Antigravity uses the native `agy` executable and model IDs from `agy models`.
 Setup prompts for an ordered list and persists comma-separated `AGY_MODELS`,
-the first model as legacy `AGY_MODEL`, and `AGY_BIN` in both host registrations.
+the first model as legacy `AGY_MODEL`, and `AGY_BIN` in all selected host registrations.
 Use `--agy-models ID,ID,...` or `AGY_MODELS` for unattended installation;
 `--agy-model ID` / legacy `AGY_MODEL` select one model. Default priority is
 `gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high`, filtered to the
@@ -127,6 +130,16 @@ The prefix is `delegate_codex`, `delegate_claude`, `delegate_rosalind`, or `dele
 | `_models` (Antigravity only) | none |
 
 Project/options: optional absolute `cwd`, `files` (array or comma-separated string), `mode` (`read-only` or `edit`), `wait` (default false), and `timeout_ms` (default 7200000). Implementation defaults to edit; other tasks default to read-only. For Codex, Rosalind, and Antigravity, read-only preserves the workspace while allowing tests and experiments in per-job scratch. Unknown arguments and invalid values are errors before execution.
+
+The AGY TUI uses the shared `reviewMcp.js WORKER` entrypoint for Codex, Claude,
+Rosalind, or AGY. It exposes `_review`, `_plan_review`, `_status`, `_list`, and
+`_cancel`, plus `_models` for the AGY worker. Its manager accepts read-only
+reviews and plan reviews and manages that subset of the provider's saved jobs.
+AGY callers pass an absolute `cwd` and use bounded status waits for results.
+Launch the AGY TUI from an environment with the selected workers' credentials.
+Its stdio servers inherit those variables from the caller.
+Setup installs one CLI skill in `~/.gemini/antigravity-cli/skills/dual-agent-review/`.
+[Antigravity MCP documentation](https://antigravity.google/docs/mcp)
 
 The project directory is resolved from explicit `cwd`, then `CLAUDE_PROJECT_DIR`,
 then the MCP server's inherited working directory. Stdio hosts normally launch

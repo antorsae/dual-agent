@@ -59,6 +59,7 @@ export interface Job {
 export const DEFAULT_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 export const UUID_PATTERN = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 export const isFinished = (job: Job): boolean => job.status !== "running";
+export const isReview = (type: TaskType): boolean => type === "review" || type === "plan-review";
 export const isCodexProvider = (provider: Provider): provider is CodexProvider => provider === "codex" || provider === "rosalind" || provider === "gemini";
 
 export function providerLabel(provider: Provider): string {

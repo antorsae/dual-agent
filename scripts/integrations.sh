@@ -1,26 +1,30 @@
 #!/bin/bash
-# Shared installation catalog. Order preserves the public menu numbers.
-# Fields: provider | hosts | option | Codex profile | display name
-INTEGRATIONS=(
-    'codex|claude|--codex-mcp||Codex'
-    'claude|codex|--claude-mcp||Claude'
-    'rosalind|claude codex|--rosalind-mcp|rosalind_delegate|Rosalind'
-    'codex|codex|--codex-from-codex||Codex'
-    'agy|claude codex|--agy-mcp||Antigravity'
-)
+# Matrix cells are in caller-row, worker-column order. The empty cell is unsupported.
+CALLERS=(claude codex agy)
+CALLER_LABELS=("Claude Code" "Codex" "AGY TUI")
+WORKERS=(codex claude rosalind agy)
+WORKER_LABELS=(Codex Claude Rosalind Antigravity)
+WORKER_PROFILES=('' '' rosalind_delegate '')
+CELLS=()
+for caller in "${CALLERS[@]}"; do
+    for worker in "${WORKERS[@]}"; do
+        if [ "$caller=$worker" = claude=claude ]; then CELLS+=(''); else CELLS+=("$caller=$worker"); fi
+    done
+done
 
-load_integration() {
-    IFS='|' read -r INTEGRATION_PROVIDER INTEGRATION_HOSTS INTEGRATION_OPTION INTEGRATION_PROFILE INTEGRATION_LABEL \
-        <<< "${INTEGRATIONS[$1]}"
-    case "$INTEGRATION_HOSTS" in
-        claude) INTEGRATION_HOST_LABEL="Claude Code" ;;
-        codex) INTEGRATION_HOST_LABEL="Codex" ;;
-        "claude codex") INTEGRATION_HOST_LABEL="Claude Code and Codex" ;;
-    esac
+load_cell() {
+    local index="$1"
+    local row=$((index / ${#WORKERS[@]})) column=$((index % ${#WORKERS[@]}))
+    INTEGRATION_HOST="${CALLERS[$row]}"
+    INTEGRATION_HOST_LABEL="${CALLER_LABELS[$row]}"
+    INTEGRATION_PROVIDER="${WORKERS[$column]}"
+    INTEGRATION_LABEL="${WORKER_LABELS[$column]}"
+    INTEGRATION_PROFILE="${WORKER_PROFILES[$column]}"
 }
 
 server_entrypoint() {
     case "$1:$2" in
+        *:agy) printf 'reviewMcp.js' ;;
         codex:claude) printf 'mcp.js' ;;
         codex:codex) printf 'codexCodexMcp.js' ;;
         claude:codex) printf 'claudeMcp.js' ;;

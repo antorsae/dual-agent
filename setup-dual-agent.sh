@@ -10,6 +10,7 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/integrations.sh"
+source "$SCRIPT_DIR/scripts/setup-grid.sh"
 VERBOSE="${DUAL_AGENT_VERBOSE:-0}"
 INSTALL_LOG="${DUAL_AGENT_INSTALL_LOG:-${TMPDIR:-/tmp}/dual-agent-setup-$$.log}"
 VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-1}"
@@ -17,7 +18,12 @@ VERIFY_AGY="${AGY_VERIFY_MODEL:-${GEMINI_VERIFY_PROFILE:-1}}"
 INTERACTIVE_INSTALL=0
 INSTALL_REQUESTED=0
 SELECTED=()
-for index in "${!INTEGRATIONS[@]}"; do SELECTED+=(0); done
+for index in "${!CELLS[@]}"; do SELECTED+=(0); done
+DELEGATE_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+CLAUDE_REGISTRY="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+AGY_REGISTRY="$HOME/.gemini/config/mcp_config.json"
+IMPLY_ROSALIND=0
+IMPLY_AGY=0
 
 check_install() {
     if command -v "$1" &> /dev/null; then
@@ -81,51 +87,19 @@ show_log_tail() {
     printf '%s\n' "${recent[@]}"
 }
 
-select_all() {
-    local index
-    INSTALL_REQUESTED=1
-    for index in "${!INTEGRATIONS[@]}"; do SELECTED[$index]="$1"; done
-}
-
-select_option() {
-    local index
-    for index in "${!INTEGRATIONS[@]}"; do
-        load_integration "$index"
-        if [ "$1" = "$INTEGRATION_OPTION" ]; then
-            INSTALL_REQUESTED=1
-            SELECTED[$index]=1
-            return 0
-        fi
-    done
-    fail "Unknown option: $1. Use --help for usage."
-}
-
-preselect_installed() {
-    local detected index
-    command -v node >/dev/null 2>&1 || return 0
-    local claude_config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
-    if ! detected="$(node "$SCRIPT_DIR/scripts/installed-integrations.mjs" "$claude_config" "${CODEX_HOME:-$HOME/.codex}" "${INTEGRATIONS[@]}")"; then
-        echo "Could not detect installed integrations; select them manually." >&2
-        return 0
-    fi
-    while IFS= read -r index; do
-        if [[ "$index" =~ ^[0-9]+$ ]] && [ "$index" -lt "${#INTEGRATIONS[@]}" ]; then
-            SELECTED[$index]=1
-        fi
-    done <<< "$detected"
-}
-
 show_help() {
-    local index
     echo "Usage: $0 [options]"
-    echo "Without arguments, choose integrations from the installation menu."
-    echo "The menu preselects integrations already registered in either host."
-    for index in "${!INTEGRATIONS[@]}"; do
-        load_integration "$index"
-        printf '  %-22s Use %s from %s\n' "$INTEGRATION_OPTION" "$INTEGRATION_LABEL" "$INTEGRATION_HOST_LABEL"
-    done
-    echo "  --both                 Install the two original delegation directions"
-    echo "  --all                  Install all delegation integrations"
+    echo "Without arguments, select callers and workers in the grid. Each installed registration is preselected."
+    echo "  --for HOST=WORKER,...  Repeat to select cells in more than one caller row"
+    echo "  Callers: claude, codex, agy. Workers: codex, claude, rosalind, agy. Claude Code can call Codex, Rosalind and AGY."
+    echo "  AGY TUI provides read-only reviews and plan reviews from the selected workers."
+    echo "  --codex-mcp            Codex in Claude Code"
+    echo "  --claude-mcp           Claude in Codex"
+    echo "  --codex-from-codex     Codex in Codex"
+    echo "  --rosalind-mcp         Rosalind in Claude Code and Codex"
+    echo "  --agy-mcp              Antigravity in Claude Code and Codex"
+    echo "  --both                 The two original delegation directions"
+    echo "  --all                  Every supported caller/worker cell"
     echo "  --skip-profile-checks  Skip live Rosalind and Antigravity checks"
     echo "  --skip-rosalind-profile-check Skip only the live Rosalind check"
     echo "  --skip-agy-check        Skip the live Antigravity model check"
@@ -142,71 +116,52 @@ while [ "$#" -gt 0 ]; do
     setup_arg="$1"
     shift
     case "$setup_arg" in
-        --all) select_all 1 ;;
-        --both) select_option --codex-mcp; select_option --claude-mcp ;;
-        --mcp) select_option --codex-mcp ;;
-        --rosalind) select_option --rosalind-mcp ;;
-        --agy|--gemini|--gemini-mcp) select_option --agy-mcp ;;
-        --agy-models|--agy-model) [ "$#" -gt 0 ] || fail "$setup_arg requires model IDs."; AGY_MODELS="$1"; shift; select_option --agy-mcp ;;
+        --for) [ "$#" -gt 0 ] || fail "--for requires HOST=WORKER,WORKER."; select_for "$1"; shift ;;
+        --all) select_all 1; INSTALL_REQUESTED=1 ;;
+        --both) select_for claude=codex; select_for codex=claude ;;
+        --mcp|--codex-mcp) select_for claude=codex ;;
+        --claude-mcp) select_for codex=claude ;;
+        --codex-from-codex) select_for codex=codex ;;
+        --rosalind|--rosalind-mcp) select_for claude=rosalind; select_for codex=rosalind ;;
+        --agy|--agy-mcp|--gemini|--gemini-mcp) select_for claude=agy; select_for codex=agy ;;
+        --agy-models|--agy-model) [ "$#" -gt 0 ] || fail "$setup_arg requires model IDs."; AGY_MODELS="$1"; shift; IMPLY_AGY=1 ;;
         --skip-profile-checks) VERIFY_ROSALIND_PROFILE=0; VERIFY_AGY=0 ;;
         --skip-rosalind-profile-check) VERIFY_ROSALIND_PROFILE=0 ;;
         --skip-agy-check|--skip-gemini-profile-check) VERIFY_AGY=0 ;;
-        --verify-rosalind-profile) select_option --rosalind-mcp; VERIFY_ROSALIND_PROFILE=1 ;;
-        --verify-agy|--verify-gemini-profile) select_option --agy-mcp; VERIFY_AGY=1 ;;
+        --verify-rosalind-profile) IMPLY_ROSALIND=1; VERIFY_ROSALIND_PROFILE=1 ;;
+        --verify-agy|--verify-gemini-profile) IMPLY_AGY=1; VERIFY_AGY=1 ;;
         --help|-h) show_help; exit 0 ;;
-        *) select_option "$setup_arg" ;;
+        *) fail "Unknown option: $setup_arg. Use --help for usage." ;;
     esac
 done
+
+# Standalone worker options keep their original destinations. Explicit worker cells take precedence.
+if [ "$IMPLY_ROSALIND" -eq 1 ] && ! worker_selected rosalind; then select_for claude=rosalind; select_for codex=rosalind; fi
+if [ "$IMPLY_AGY" -eq 1 ] && ! worker_selected agy; then select_for claude=agy; select_for codex=agy; fi
 
 echo -e "${BLUE}Dual Agent Environment Setup${NC}"
 if [ "$INSTALL_REQUESTED" -eq 0 ]; then
     INTERACTIVE_INSTALL=1
-    preselect_installed
-    echo "Existing integrations are preselected. Toggle any choice to change this run."
-    echo "Live checks are enabled unless skipped; Antigravity tries the next model on quota exhaustion."
-    while true; do
-        echo "Select integrations (toggle a number, then continue):"
-        for index in "${!INTEGRATIONS[@]}"; do
-            load_integration "$index"
-            mark=" "
-            [ "${SELECTED[$index]}" -eq 0 ] || mark="x"
-            echo "  $((index + 1))) [$mark] Use $INTEGRATION_LABEL from $INTEGRATION_HOST_LABEL"
-        done
-        echo "  a) Select all    n) Clear all    c) Continue"
-        if ! read -r -n 1 -p "Toggle 1-${#INTEGRATIONS[@]}, a/n, or c: " choice; then
-            fail "No selection received. Use --help for unattended setup options."
-        fi
-        echo ""
-        case "$choice" in
-            [1-9])
-                if [ "$choice" -le "${#INTEGRATIONS[@]}" ]; then
-                    index=$((choice - 1))
-                    SELECTED[$index]=$((1 - SELECTED[index]))
-                else
-                    echo "Invalid choice"
-                fi
-                ;;
-            a|A) select_all 1 ;;
-            n|N) select_all 0 ;;
-            c|C) break ;;
-            *) echo "Invalid choice" ;;
-        esac
-    done
+    echo "Live checks are enabled unless skipped."
+    choose_from_grid
 fi
 
 SELECTION_COUNT=0
 NEED_CLAUDE_HOST=0
 NEED_CODEX_HOST=0
+NEED_AGY_HOST=0
 NEED_CLAUDE_WORKER=0
 NEED_CODEX_WORKER=0
 NEED_AGY_WORKER=0
-for index in "${!INTEGRATIONS[@]}"; do
+for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
     SELECTION_COUNT=$((SELECTION_COUNT + 1))
-    load_integration "$index"
-    for host in $INTEGRATION_HOSTS; do
-        case "$host" in claude) NEED_CLAUDE_HOST=1 ;; codex) NEED_CODEX_HOST=1 ;; esac
-    done
+    load_cell "$index"
+    case "$INTEGRATION_HOST" in
+        claude) NEED_CLAUDE_HOST=1 ;;
+        codex) NEED_CODEX_HOST=1 ;;
+        agy) NEED_AGY_HOST=1 ;;
+    esac
     case "$INTEGRATION_PROVIDER" in
         claude) NEED_CLAUDE_WORKER=1 ;;
         agy) NEED_AGY_WORKER=1 ;;
@@ -244,7 +199,7 @@ if [ "$NEED_CLAUDE_WORKER" -eq 1 ]; then
         DELEGATE_CLAUDE_BIN="$(command -v "$DELEGATE_CLAUDE_BIN")"
     fi
 fi
-if [ "$NEED_AGY_WORKER" -eq 1 ]; then
+if [ "$NEED_AGY_WORKER" -eq 1 ] || [ "$NEED_AGY_HOST" -eq 1 ]; then
     DELEGATE_AGY_BIN="${AGY_BIN:-agy}"
     check_install "$DELEGATE_AGY_BIN" "Install and authenticate Antigravity CLI, or set AGY_BIN" || MISSING=1
     if command -v "$DELEGATE_AGY_BIN" >/dev/null; then DELEGATE_AGY_BIN="$(command -v "$DELEGATE_AGY_BIN")"; fi
@@ -254,14 +209,14 @@ fi
 AGENT_DIR="$SCRIPT_DIR/agent"
 DELEGATE_STATE_DIR="${DUAL_AGENT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/dual-agent}"
 case "$DELEGATE_STATE_DIR" in /*) ;; *) fail "DUAL_AGENT_STATE_DIR must be an absolute path." ;; esac
-DELEGATE_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-for index in "${!INTEGRATIONS[@]}"; do
-    [ "${SELECTED[$index]}" -eq 1 ] || continue
-    load_integration "$index"
-    [ -n "$INTEGRATION_PROFILE" ] || continue
-    profile_file="$DELEGATE_CODEX_HOME/$INTEGRATION_PROFILE.config.toml"
-    [ -f "$profile_file" ] || fail "$INTEGRATION_LABEL Codex profile not found: $profile_file. Configure codex -p $INTEGRATION_PROFILE before installing $INTEGRATION_LABEL."
-    echo "  $INTEGRATION_LABEL Codex profile: using existing $profile_file"
+# Validate worker profiles once, even when several callers use the same worker.
+for column in "${!WORKERS[@]}"; do
+    profile="${WORKER_PROFILES[$column]}"
+    [ -n "$profile" ] && worker_selected "${WORKERS[$column]}" || continue
+    profile_file="$DELEGATE_CODEX_HOME/$profile.config.toml"
+    label="${WORKER_LABELS[$column]}"
+    [ -f "$profile_file" ] || fail "$label Codex profile not found: $profile_file. Configure codex -p $profile before installing $label."
+    echo "  $label Codex profile: using existing $profile_file"
 done
 
 verify_codex_profile() {
@@ -281,21 +236,14 @@ verify_codex_profile() {
         return 1
     fi
 }
-for index in "${!INTEGRATIONS[@]}"; do
-    [ "${SELECTED[$index]}" -eq 1 ] || continue
-    load_integration "$index"
-    [ -n "$INTEGRATION_PROFILE" ] || continue
-    verify_profile=1
-    case "$INTEGRATION_PROVIDER" in
-        rosalind) verify_profile="$VERIFY_ROSALIND_PROFILE" ;;
+if worker_selected rosalind; then
+    case "$VERIFY_ROSALIND_PROFILE" in
+        0) echo "  Live Rosalind profile check: skipped" ;;
+        1) run_step "Live Rosalind profile check (one request)" verify_codex_profile rosalind rosalind_delegate ||
+            fail "The live Rosalind profile check failed. Fix the profile or use --skip-rosalind-profile-check to skip verification." ;;
+        *) fail "Rosalind profile verification must be 0 or 1." ;;
     esac
-    case "$verify_profile" in
-        0) echo "  Live $INTEGRATION_LABEL profile check: skipped" ;;
-        1) run_step "Live $INTEGRATION_LABEL profile check (one request)" verify_codex_profile "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE" ||
-            fail "The live $INTEGRATION_LABEL profile check failed. Fix the profile or use --skip-$INTEGRATION_PROVIDER-profile-check to skip verification." ;;
-        *) fail "$INTEGRATION_LABEL profile verification must be 0 or 1." ;;
-    esac
-done
+fi
 
 install_skill() {
     local source="$1" destination="$2"
@@ -353,6 +301,13 @@ codex_registration_env() {
     done < "$config"
 }
 
+saved_worker_env() {
+    local value
+    value="$(codex_registration_env "$1" "$2")"
+    if [ -n "$value" ]; then printf '%s' "$value"; return; fi
+    node "$SCRIPT_DIR/scripts/installed-integrations.mjs" --env "$CLAUDE_REGISTRY" "$AGY_REGISTRY" "$1" "$2"
+}
+
 forward_codex_keys() {
     local server="$1" keys
     shift
@@ -374,13 +329,20 @@ register_integration() {
     elif [ "$provider" = "agy" ]; then
         server_env+=(--env "AGY_BIN=$DELEGATE_AGY_BIN" --env "AGY_MODELS=$DELEGATE_AGY_MODELS" --env "AGY_MODEL=$DELEGATE_AGY_MODEL")
     else
-        server_env+=(--env "CODEX_BIN=$DELEGATE_CODEX_BIN" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
+        local worker_bin="$DELEGATE_CODEX_BIN"
+        if [ "$host" = agy ]; then worker_bin="$(command -v "$worker_bin")"; fi
+        server_env+=(--env "CODEX_BIN=$worker_bin" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
     fi
     if [ "$host" = "claude" ]; then
         destination="$HOME/.claude/skills/$server"
         run_logged claude mcp remove "$server" --scope user || true
         run_step "$server → Claude Code" claude mcp add --scope user "$server" "${server_env[@]}" -- node "$entrypoint" ||
             fail "Could not register $server for Claude. Fix the Claude CLI error above and rerun setup."
+    elif [ "$host" = "agy" ]; then
+        # The AGY-specific entrypoint advertises and accepts read-only reviews only.
+        run_step "$server → AGY TUI" "$DELEGATE_AGY_BIN" mcp add "${server_env[@]}" "$server" -- "$(command -v node)" "$entrypoint" "$provider" ||
+            fail "Could not register $server for AGY. Fix the AGY CLI error above and rerun setup."
+        return 0
     else
         destination="$DELEGATE_CODEX_HOME/skills/$server"
         run_logged codex mcp remove "$server" || true
@@ -414,48 +376,63 @@ build_agent() { (cd "$AGENT_DIR" && npm ci && npm run build); }
 run_step "MCP servers" build_agent || fail "Agent install/build failed."
 
 # Check every selected artifact before replacing any existing registration.
-for index in "${!INTEGRATIONS[@]}"; do
+for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
-    load_integration "$index"
-    for host in $INTEGRATION_HOSTS; do
-        entrypoint="$AGENT_DIR/dist/$(server_entrypoint "$INTEGRATION_PROVIDER" "$host")"
+    load_cell "$index"
+    host="$INTEGRATION_HOST"
+    entrypoint="$AGENT_DIR/dist/$(server_entrypoint "$INTEGRATION_PROVIDER" "$host")"
+    [ -f "$entrypoint" ] || fail "MCP build output not found: $entrypoint"
+    if [ "$host" != agy ]; then
         skill="$SCRIPT_DIR/.$host/skills/$INTEGRATION_PROVIDER-delegate/SKILL.md"
-        [ -f "$entrypoint" ] || fail "MCP build output not found: $entrypoint"
         [ -f "$skill" ] || fail "Skill not found: $skill"
-    done
+    fi
 done
+if [ "$NEED_AGY_HOST" -eq 1 ]; then
+    AGY_REVIEW_SKILL="$SCRIPT_DIR/.agy/skills/dual-agent-review"
+    [ -f "$AGY_REVIEW_SKILL/SKILL.md" ] || fail "Skill not found: $AGY_REVIEW_SKILL/SKILL.md"
+fi
 
 # Read the saved effort before removing Claude's registration.
 CLAUDE_WORKER_EFFORT=""
 if [ "$NEED_CLAUDE_WORKER" -eq 1 ]; then
-    CLAUDE_WORKER_EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-$(codex_registration_env claude-delegate CLAUDE_CODE_EFFORT_LEVEL)}"
+    CLAUDE_WORKER_EFFORT="${CLAUDE_CODE_EFFORT_LEVEL:-$(saved_worker_env claude-delegate CLAUDE_CODE_EFFORT_LEVEL)}"
 fi
 echo -e "${BLUE}[3/4]${NC} Registering integrations"
-for index in "${!INTEGRATIONS[@]}"; do
+for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
-    load_integration "$index"
-    for host in $INTEGRATION_HOSTS; do
-        register_integration "$host" "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE"
-    done
+    load_cell "$index"
+    register_integration "$INTEGRATION_HOST" "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE"
 done
-
-if [ "$NEED_AGY_WORKER" -eq 1 ]; then
-    run_logged claude mcp remove gemini-delegate --scope user || true
-    run_logged codex mcp remove gemini-delegate || true
-    rm -rf "$HOME/.claude/skills/gemini-delegate" "$DELEGATE_CODEX_HOME/skills/gemini-delegate"
+if [ "$NEED_AGY_HOST" -eq 1 ]; then
+    run_step "AGY TUI review skill" install_skill "$AGY_REVIEW_SKILL" "$HOME/.gemini/antigravity-cli/skills/dual-agent-review" ||
+        fail "Could not install the AGY TUI review skill."
 fi
+
+# Retire the legacy Gemini registration only in hosts selected for its replacement.
+for index in "${!CELLS[@]}"; do
+    [ "${SELECTED[$index]}" -eq 1 ] || continue
+    case "${CELLS[$index]}" in
+        claude=agy) run_logged claude mcp remove gemini-delegate --scope user || true; rm -rf "$HOME/.claude/skills/gemini-delegate" ;;
+        codex=agy) run_logged codex mcp remove gemini-delegate || true; rm -rf "$DELEGATE_CODEX_HOME/skills/gemini-delegate" ;;
+    esac
+done
 
 echo -e "${BLUE}[4/4]${NC} Finalizing"
 echo -e "${GREEN}Setup Complete!${NC}"
-for index in "${!INTEGRATIONS[@]}"; do
+for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
-    load_integration "$index"
+    load_cell "$index"
     prefix="delegate_$INTEGRATION_PROVIDER"
     echo "Restart $INTEGRATION_HOST_LABEL to load $INTEGRATION_LABEL delegation."
-    echo "Tools: $prefix, ${prefix}_review, ${prefix}_implement, ${prefix}_plan_review"
+    if [ "$INTEGRATION_HOST" = agy ]; then
+        echo "Reviews: ${prefix}_review, ${prefix}_plan_review"
+    else
+        echo "Tools: $prefix, ${prefix}_review, ${prefix}_implement, ${prefix}_plan_review"
+    fi
     echo "Jobs: ${prefix}_status, ${prefix}_list, ${prefix}_cancel"
     if [ -n "$INTEGRATION_PROFILE" ]; then echo "Codex profile: $INTEGRATION_PROFILE"; fi
-    for host in $INTEGRATION_HOSTS; do echo "Check registration: $host mcp get $INTEGRATION_PROVIDER-delegate"; done
+    if [ "$INTEGRATION_HOST" = agy ]; then echo "Check registration: agy mcp list"
+    else echo "Check registration: $INTEGRATION_HOST mcp get $INTEGRATION_PROVIDER-delegate"; fi
 done
 if [ -n "$CLAUDE_WORKER_EFFORT" ]; then echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"; fi
 if [ "$NEED_AGY_WORKER" -eq 1 ]; then

@@ -43,7 +43,7 @@ async function fixture(t) {
     await rm(root, { recursive: true, force: true });
   });
   async function connect(provider = "codex", overrides = {}, cwd = root, host = "claude") {
-    const server = provider === "codex"
+    const server = host === "agy" ? "../dist/reviewMcp.js" : provider === "codex"
       ? host === "codex" ? "../dist/codexCodexMcp.js" : "../dist/mcp.js"
       : provider === "claude"
         ? "../dist/claudeMcp.js"
@@ -52,7 +52,7 @@ async function fixture(t) {
           : `../dist/${provider}Mcp.js`;
     const transport = new StdioClientTransport({
       command: process.execPath,
-      args: [fileURLToPath(new URL(server, import.meta.url))],
+      args: [fileURLToPath(new URL(server, import.meta.url)), ...(host === "agy" ? [provider] : [])],
       cwd, env: { ...env, ...overrides }, stderr: "pipe",
     });
     transport.stderr?.on("data", () => {});
@@ -70,6 +70,48 @@ async function fixture(t) {
   }
   return { root, project, state, capture, requests, descendants, connect, store: new JobStore(state) };
 }
+
+for (const provider of ["codex", "claude", "rosalind", "agy"]) {
+  test(`AGY TUI exposes read-only ${provider} reviews and enforces its tool scope`, async t => {
+    const f = await fixture(t);
+    const c = await f.connect(provider, {}, f.project, "agy");
+    const discovery = await c.client.listTools();
+    const suffixes = ["_review", "_plan_review", "_status", "_list", "_cancel"];
+    if (provider === "agy") suffixes.push("_models");
+    assert.deepEqual(discovery.tools.map(tool => tool.name).sort(), suffixes.map(suffix => `delegate_${provider}${suffix}`).sort());
+    assert.equal(c.client.getServerCapabilities().experimental?.["claude/channel"], undefined);
+    assert.match(c.client.getInstructions(), /AGY project's absolute path/);
+    for (const suffix of ["_review", "_plan_review"]) {
+      const tool = discovery.tools.find(tool => tool.name === `delegate_${provider}${suffix}`);
+      assert.deepEqual(tool.inputSchema.properties.mode.enum, ["read-only"]);
+      const prompt = suffix === "_review" ? { prompt: "review" } : { plan: "plan" };
+      assert.equal((await c.call(suffix, { ...prompt, mode: "edit" })).isError, true);
+      const result = await c.call(suffix, { ...prompt, cwd: f.project, wait: true });
+      assert.equal(result.structuredContent.status, "completed", text(result));
+      assert.equal(result.structuredContent.mode, "read-only");
+      assert.equal((await c.call("_status", {task_id: result.structuredContent.task_id})).structuredContent.output, "fixture answer\n");
+    }
+    for (const suffix of ["", "_implement"]) assert.equal((await c.call(suffix, { prompt: "hidden tool" })).isError, true);
+    assert.equal((await f.requests()).length, 2);
+  });
+}
+
+test("AGY review management cannot inspect or cancel other sorts of shared jobs", async t => {
+  const f = await fixture(t);
+  const full = await f.connect("codex", {}, f.project, "codex");
+  const agy = await f.connect("codex", {}, f.project, "agy");
+  const edit = await full.call("_review", { prompt: "[hold] editing review", mode: "edit" });
+  const custom = await full.call("", { prompt: "custom job", wait: true });
+  const read = await agy.call("_plan_review", { plan: "[hold] plan review" });
+  const editable = edit.structuredContent.task_id, visible = read.structuredContent.task_id;
+  for (const id of [editable, custom.structuredContent.task_id]) {
+    for (const suffix of ["_status", "_cancel"]) assert.equal((await agy.call(suffix, {task_id:id})).isError, true);
+    assert.equal(await f.store.cancellationRequested(id), false);
+  }
+  assert.deepEqual((await agy.call("_list", {})).structuredContent.jobs.map(job => job.task_id), [visible]);
+  assert.equal((await agy.call("_cancel", {task_id:visible})).structuredContent.status, "cancelled");
+  assert.equal((await full.call("_cancel", {task_id:editable})).structuredContent.status, "cancelled");
+});
 
 for (const [provider, profile] of [["rosalind", "rosalind_delegate"]]) {
   test(`${provider} exposes the same tools and uses its Codex profile`, async t => {
