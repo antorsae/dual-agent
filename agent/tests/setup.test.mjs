@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -8,7 +8,7 @@ import { test } from "node:test";
 const codexModule = new URL("../dist/codex.js", import.meta.url).href;
 
 async function fixture(t, missingBinaries = []) {
-  const dir = await mkdtemp(join(tmpdir(), "dual-agent-setup-"));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), "dual-agent-setup-")));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const testHome = join(dir, "managed home");
   const bin = join(dir, "bin");
@@ -21,7 +21,7 @@ async function fixture(t, missingBinaries = []) {
   await mkdir(join(dir, "scripts"));
   await mkdir(join(dir, "agent/src"));
   await writeFile(join(dir, "agent/src/agyModels.mjs"), await readFile(new URL("../src/agyModels.mjs", import.meta.url)));
-  for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh", "scripts/integrations.sh", "scripts/setup-grid.sh", "scripts/agy-setup.sh", "scripts/installed-integrations.mjs"]) {
+  for (const script of ["setup-dual-agent.sh", "uninstall-dual-agent.sh", "scripts/integrations.sh", "scripts/terminal-picker.sh", "scripts/caller-homes.sh", "scripts/setup-grid.sh", "scripts/agy-setup.sh", "scripts/installed-integrations.mjs"]) {
     const source = await readFile(new URL("../../" + script, import.meta.url), "utf8");
     // Redirect managed files without changing the process HOME.
     await writeFile(join(dir, script), source.replaceAll("$HOME", "$DUAL_AGENT_TEST_HOME"));
@@ -49,7 +49,7 @@ async function fixture(t, missingBinaries = []) {
     'const fs = require("node:fs");',
     'const name = require("node:path").basename(process.argv[1]);',
     "const args = process.argv.slice(2);",
-    'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args, codexHome: process.env.CODEX_HOME }) + "\\n");',
+    'fs.appendFileSync(process.env.DUAL_AGENT_TEST_LOG, JSON.stringify({ name, args, codexHome: process.env.CODEX_HOME, claudeHome: process.env.CLAUDE_CONFIG_DIR }) + "\\n");',
     'if (["claude", "codex", "agy"].includes(name) && args[1] === "add" && process.env.DUAL_AGENT_TEST_FAIL_REGISTER === name) { console.error("registration denied"); process.exit(1); }',
     'if (process.env.DUAL_AGENT_TEST_FAIL_COMMAND === name) { console.error("fixture command failed"); process.exit(1); }',
     'if (name === "codex" && args[0] === "mcp" && args[1] === "get") {',
@@ -125,7 +125,8 @@ async function fixture(t, missingBinaries = []) {
   return {
     dir, testHome, customBinary, env,
     run: (args = [], input = "", overrides = {}, status = 0) => runScript("setup-dual-agent.sh", args, input, overrides, status),
-    uninstall: (overrides = {}) => runScript("uninstall-dual-agent.sh", [], "", overrides, 0),
+    grid: (keys, overrides = {}, args = []) => runScript("setup-dual-agent.sh", args, "\n" + keys, overrides, 0),
+    uninstall: (overrides = {}, args = [], input = "\n", status = 0) => runScript("uninstall-dual-agent.sh", args, input, overrides, status),
   };
 }
 
@@ -135,7 +136,14 @@ const agyInBoth = `${left} ${down} `;
 function gridRow(output, caller, last = false) {
   const lines = output.split("\n").filter(line => line.startsWith(caller + " ") && line.includes("["));
   assert.ok(lines.length, output);
-  return lines.at(last ? -1 : 0).match(/\[[ x]\]|-/g);
+  return lines.at(last ? -1 : 0).match(/\[[ x]\]|(?<!\S)-(?!\S)/g);
+}
+
+async function configuredHome(f, name, file, content) {
+  const home = join(f.testHome, name);
+  await mkdir(home, { recursive: true });
+  await writeFile(join(home, file), content);
+  return home;
 }
 
 function registrationEnv(calls, name, server) {
@@ -175,7 +183,7 @@ test("persists CODEX_BIN for a fresh delegate process", async (t) => {
 
 test("registers codex when codex-pool is unavailable", async (t) => {
   const f = await fixture(t, ["codex-pool"]);
-  const { calls, output } = await f.run([], " \n");
+  const { calls, output } = await f.grid(" \n");
   assert.match(output, /\[WARN\].*codex-pool.*falling back to codex/);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex");
 });
@@ -211,7 +219,7 @@ test("does not replace an unavailable custom CODEX_BIN", async (t) => {
 
 test("registers all delegation integrations from the component menu", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], "a\n");
+  const { calls } = await f.grid("a\n");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex", "rosalind-delegate").CODEX_HOME, join(f.testHome, ".codex"));
   assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "fixture-model");
@@ -238,10 +246,10 @@ test("--for installs just the selected AGY reviewers with one shared skill and o
 test("grid navigation and row toggle select AGY reviewers independently", async t => {
   const f = await fixture(t);
   // Go to AGY, select its whole row, then toggle its last (AGY worker) cell off.
-  const { calls, output } = await f.run([], down + down + "r" + left + " \n");
+  const { calls, output } = await f.grid(down + down + "r" + left + " \n");
   assert.deepEqual(gridRow(output, "AGY TUI", true), ["[x]", "[x]", "[x]", "[ ]"]);
   assert.deepEqual(calls.filter(c => c.args[1] === "add").map(c => c.args.at(-1)), ["codex", "claude", "rosalind"]);
-  const next = await f.run([], "n\n");
+  const next = await f.grid("n\n");
   assert.deepEqual(gridRow(next.output, "AGY TUI"), ["[x]", "[x]", "[x]", "[ ]"]);
   assert.deepEqual(gridRow(next.output, "Codex"), Array(4).fill("[ ]"));
   assert.deepEqual(gridRow(next.output, "Claude Code"), ["[ ]", "-", "[ ]", "[ ]"]);
@@ -274,7 +282,8 @@ test("AGY-only worker settings are retained for later callers", async t => {
 
 test("--for rejects malformed and unsupported cells before running prerequisites", async t => {
   const f = await fixture(t);
-  for (const spec of ["claude=claude", "unknown=codex", "agy=codex,unknown", "agy=", "agy=codex,", "agy=codex,,claude", "agy=codex=agy", "codex"]) {
+  for (const spec of ["claude=claude", "unknown=codex", "agy=codex,unknown", "agy=", "agy=codex,", "agy=codex,,claude", "agy=codex=agy", "codex",
+    "codex@=claude", "claude@relative=codex", "agy@/alternate=codex"]) {
     const { calls, output } = await f.run(["--codex-mcp", "--for", spec], "", {}, 1);
     assert.match(output, /Invalid selection|Unsupported caller\/worker/);
     assert.deepEqual(calls, []);
@@ -300,7 +309,7 @@ test("AGY preflights all selected artifacts and leaves other servers intact when
 
 test("a fresh installation starts with no integrations selected", async t => {
   const f = await fixture(t);
-  const { calls, output } = await f.run([], "c");
+  const { calls, output } = await f.grid("c");
   assert.deepEqual(gridRow(output, "Claude Code"), ["[ ]", "-", "[ ]", "[ ]"]);
   for (const host of ["Codex", "AGY TUI"]) assert.deepEqual(gridRow(output, host), Array(4).fill("[ ]"));
   assert.match(output, /Nothing selected/);
@@ -310,7 +319,7 @@ test("a fresh installation starts with no integrations selected", async t => {
 test("rerunning setup preselects all installed integrations and Continue reinstalls them", async t => {
   const f = await fixture(t);
   const installed = await f.run(["--all"]);
-  const { calls, output } = await f.run([], "c");
+  const { calls, output } = await f.grid("c");
   assert.deepEqual(gridRow(output, "Claude Code"), ["[x]", "-", "[x]", "[x]"]);
   for (const host of ["Codex", "AGY TUI"]) assert.deepEqual(gridRow(output, host), Array(4).fill("[x]"));
   const registrations = calls.slice(installed.calls.length).filter(call => call.args[1] === "add");
@@ -323,7 +332,7 @@ for (const [option, selected, unselected, host] of [
   test(`${option} is detected independently for its host`, async t => {
     const f = await fixture(t);
     const installed = await f.run([option]);
-    const { calls, output } = await f.run([], "c");
+    const { calls, output } = await f.grid("c");
     assert.equal(gridRow(output, selected)[0], "[x]");
     assert.equal(gridRow(output, unselected)[0], "[ ]");
     const registrations = calls.slice(installed.calls.length).filter(call => call.args[1] === "add");
@@ -341,7 +350,7 @@ for (const [provider, column] of [["rosalind", 2], ["agy", 3]]) {
       } else {
         await writeFile(join(f.testHome, ".codex/config.toml"), `[mcp_servers.${provider}-delegate]\ncommand = "missing-worker"\nenabled = false\n`);
       }
-      const { calls, output } = await f.run(["--skip-profile-checks"], "c");
+      const { calls, output } = await f.grid("c", {}, ["--skip-profile-checks"]);
       assert.equal(gridRow(output, host === "claude" ? "Claude Code" : "Codex")[column], "[x]");
       assert.equal(gridRow(output, host === "claude" ? "Codex" : "Claude Code")[column], "[ ]");
       assert.equal(gridRow(output, "AGY TUI")[column], "[ ]");
@@ -360,7 +369,7 @@ test("installed integrations can be toggled off or cleared without uninstalling"
   const paths = [join(f.testHome, ".claude.json"), join(f.testHome, ".codex/config.toml")];
   const before = await Promise.all(paths.map(path => readFile(path, "utf8")));
   for (const input of [bothDirections + "\n", "n\n"]) {
-    const { calls, output } = await f.run([], input);
+    const { calls, output } = await f.grid(input);
     assert.match(output, /Nothing selected/);
     assert.ok(!calls.slice(installed.calls.length).some(call => ["add", "remove"].includes(call.args[1])));
     assert.deepEqual(await Promise.all(paths.map(path => readFile(path, "utf8"))), before);
@@ -386,16 +395,272 @@ test("detection respects alternate host configuration directories", async t => {
   await Promise.all([mkdir(codexConfig), mkdir(claudeConfig)]);
   await writeFile(join(codexConfig, "config.toml"), '[mcp_servers.claude-delegate]\ncommand = "node"\n');
   await writeFile(join(claudeConfig, ".claude.json"), '{"mcpServers":{"agy-delegate":{"command":"node"}}}');
-  const { output } = await f.run([], "nc", { CODEX_HOME: codexConfig, CLAUDE_CONFIG_DIR: claudeConfig });
+  const { output } = await f.grid("nc", { CODEX_HOME: codexConfig, CLAUDE_CONFIG_DIR: claudeConfig });
   assert.deepEqual(gridRow(output, "Codex"), ["[ ]", "[x]", "[ ]", "[ ]"]);
   assert.deepEqual(gridRow(output, "Claude Code"), ["[ ]", "-", "[ ]", "[x]"]);
   assert.deepEqual(gridRow(output, "AGY TUI"), Array(4).fill("[ ]"));
 });
 
+test("home discovery recognizes dotted and undotted configs, deduplicates aliases and preselects each registration", async t => {
+  const f = await fixture(t);
+  const api = await configuredHome(f, ".claude-api", "settings.json", "{}");
+  await symlink(api, join(f.testHome, ".claude-alias"));
+  await configuredHome(f, ".claude-vhh", ".claude.json", '{"mcpServers":{"rosalind-delegate":{}}}');
+  await configuredHome(f, "claude-vhh", "settings.json", "{}");
+  await configuredHome(f, "codex-web", "config.toml", '[mcp_servers.claude-delegate]\ncommand = "node"\n');
+  await configuredHome(f, ".codex-cache", "unrelated", "");
+  const { output, calls } = await f.run([], " " + down + " \nn\n");
+  assert.match(output, /\[ \] Claude Code ~\/\.claude-api/);
+  assert.match(output, /\[x\] Claude Code ~\/\.claude-vhh/);
+  assert.match(output, /\[ \] Claude Code ~\/claude-vhh/);
+  assert.match(output, /\[x\] Codex ~\/codex-web/);
+  assert.doesNotMatch(output, /\.claude-alias|\.codex-cache/);
+  assert.deepEqual(gridRow(output, "Claude Code ~/.claude-api"), ["[ ]", "-", "[ ]", "[ ]"]);
+  assert.doesNotMatch(output, /^Claude Code ~\/\.claude\s/m);
+  assert.deepEqual(gridRow(output, "Claude Code ~/.claude-vhh"), ["[ ]", "-", "[x]", "[ ]"]);
+  assert.deepEqual(gridRow(output, "Codex ~/codex-web"), ["[ ]", "[x]", "[ ]", "[ ]"]);
+  assert.ok(!calls.some(call => ["add", "remove"].includes(call.args[1])));
+});
+
+test("the worker grid lists checked caller homes separately from the worker configuration homes", async t => {
+  const f = await fixture(t);
+  for (const name of [".claude-api", ".claude-unused", "claude-vhh"]) await configuredHome(f, name, "settings.json", "{}");
+  for (const name of [".codex-api", ".codex-web"]) await configuredHome(f, name, "config.toml", "");
+
+  async function header(choices, width) {
+    const { output } = await f.run([], choices + "\nq", { LINES: "32", COLUMNS: String(width) });
+    const start = output.indexOf("Select workers for each caller home");
+    const end = output.indexOf("Caller / worker", start);
+    assert.ok(start >= 0 && end > start, output);
+    return output.slice(start, end);
+  }
+  const selected = await header("2,4,6,8", 256);
+  assert.ok(selected.includes("Selected Claude caller homes   ~/.claude-api, ~/claude-vhh"));
+  assert.ok(selected.includes("Selected Codex caller homes   ~/.codex-api"));
+  assert.ok(selected.includes("Selected AGY caller home   ~/.gemini/antigravity-cli"));
+  assert.ok(selected.includes("Codex and Rosalind worker home   " + join(f.testHome, ".codex")));
+  assert.ok(selected.includes("Claude worker home   " + join(f.testHome, ".claude")));
+  assert.doesNotMatch(selected, /\.claude-unused|\.codex-web/);
+
+  const wrapped = await header("2,4,6,8", 40);
+  for (const path of ["~/.claude-api", "~/claude-vhh", "~/.codex-api", "~/.gemini/antigravity-cli"]) {
+    assert.ok(wrapped.includes(path), wrapped);
+  }
+  const agyOnly = await header("8", 80);
+  assert.ok(agyOnly.includes("Selected AGY caller home"));
+  assert.doesNotMatch(agyOnly, /Selected (Codex|Claude) caller homes/);
+});
+
+test("cancelling either setup screen or the uninstall picker leaves the registrations intact", async t => {
+  const f = await fixture(t);
+  const installed = await f.run(["--both"]);
+  const paths = [join(f.testHome, ".claude.json"), join(f.testHome, ".codex/config.toml")];
+  const saved = await Promise.all(paths.map(path => readFile(path, "utf8")));
+  for (const cancel of [
+    () => f.run([], down + " q"),
+    () => f.grid(right + " \x1b"),
+    () => f.uninstall({}, [], "n" + down + " q"),
+  ]) {
+    const result = await cancel();
+    assert.match(result.output, /Selection cancelled/);
+    assert.ok(!result.calls.slice(installed.calls.length).some(c => ["add", "remove"].includes(c.args[1]) || c.name === "npm"));
+  }
+  assert.deepEqual(await Promise.all(paths.map(path => readFile(path, "utf8"))), saved);
+});
+
+test("a short terminal pages over homes and worker rows and restores the screen on quit", async t => {
+  const f = await fixture(t);
+  for (let i = 1; i <= 6; i++) await configuredHome(f, ".claude-alt-" + i, "settings.json", "{}");
+  const stty = spawnSync("bash", ["-c", "command -v stty"], {encoding:"utf8"});
+  if (stty.status !== 0) return t.skip("stty is needed for the pseudo-terminal fixture");
+  await symlink(stty.stdout.trim(), join(f.dir, "bin/stty"));
+  // Wait for each frame before sending its next key, just as a terminal user would.
+  const driver = String.raw`
+import os, pty, select, struct, subprocess, sys, termios, fcntl, time
+
+master, slave = pty.openpty()
+fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 9, 42, 0, 0))
+env = dict(os.environ, PATH=sys.argv[1], TERM="xterm-256color")
+child = subprocess.Popen(["bash", "setup-dual-agent.sh"], stdin=slave, stdout=slave, stderr=slave, env=env)
+os.close(slave)
+pending = b""
+transcript = bytearray()
+try:
+    for frame, keys in [
+        ("3 selected   Homes 1–4 of 9", b"\x1b[6~"),
+        ("3 selected   Homes 5–8 of 9", b" "),
+        ("4 selected   Homes 5–8 of 9", b"\x1b[A"),
+        ("4 selected   Homes 4–7 of 9", b"\x1b[5~"),
+        ("4 selected   Homes 1–4 of 9", b"a"),
+        ("9 selected   Homes 1–4 of 9", b"\r"),
+        ("Homes 1–1 of 9   Codex worker", b"\x1b[F"),
+        ("Homes 9–9 of 9   Codex worker", b"\x1b[C"),
+        ("Homes 9–9 of 9   Claude worker", b"q"),
+        ("Selection cancelled.", b""),
+    ]:
+        expected = frame.encode()
+        deadline = time.monotonic() + 10
+        while expected not in pending:
+            if not select.select([master], [], [], max(0, deadline - time.monotonic()))[0]:
+                raise AssertionError(f"waiting for {frame!r}, last frame {pending[-1200:]!r}")
+            block = os.read(master, 8192)
+            if not block:
+                raise EOFError(frame)
+            pending += block
+            transcript.extend(block)
+        pending = pending.partition(expected)[2]
+        if keys:
+            os.write(master, keys)
+    assert child.wait(timeout=5) == 0
+    sys.stdout.buffer.write(transcript)
+finally:
+    if child.poll() is None:
+        child.kill()
+        child.wait()
+    os.close(master)
+`;
+  const python = process.env.DUAL_AGENT_TEST_PYTHON || "python3";
+  const result = spawnSync(python, ["-c", driver, f.env.PATH], {
+    cwd: f.dir, env: { ...f.env, PATH: process.env.PATH }, encoding: "utf8", timeout: 30000,
+  });
+  if (result.error?.code === "ENOENT") return t.skip("Python is needed for the pseudo-terminal fixture");
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(result.stdout.includes("\x1b[7m> [x] Claude Code ~/.claude-alt-4\x1b[0m"));
+  assert.ok(result.stdout.includes("Caller   Claude Code ~/.claude"));
+  assert.match(result.stdout, /Caller   AGY TUI [^\r\n]*antigravity-cli/);
+  assert.ok(result.stdout.includes("Worker   Claude  ~/.claude"));
+  assert.equal(result.stdout.split("\x1b[?1049h").length - 1, 2);
+  assert.equal(result.stdout.split("\x1b[?1049l").length - 1, 2);
+  assert.match(result.stdout, /\x1b\[\?25h\x1b\[\?1049lSelection cancelled/);
+  assert.doesNotMatch(await readFile(join(f.dir, "calls.jsonl"), "utf8"), /"npm"|\["mcp","(?:add|remove)"/);
+});
+
+test("qualified homes keep registrations, skills and forwarded worker keys in their selected destinations", async t => {
+  const f = await fixture(t);
+  const claude = await configuredHome(f, "claude-vhh", ".claude.json", "{}");
+  await symlink(claude, join(f.testHome, ".claude-alias"));
+  const caller = await configuredHome(f, ".codex-api = test", "config.toml", 'env_key = "CALLER_KEY"\n');
+  const worker = join(f.testHome, ".codex");
+  const base = 'env_key = "WORKER_KEY"\n';
+  await writeFile(join(worker, "config.toml"), base);
+  await writeFile(join(worker, "rosalind_delegate.config.toml"), 'env_key = "ROSALIND_KEY"\n');
+  const { output, calls } = await f.run(["--for", `claude@${claude}=rosalind`, "--for", "claude@~/.claude-alias=rosalind",
+    "--for", `codex@${caller}=rosalind`]);
+  const adds = calls.filter(c => c.args[1] === "add");
+  assert.deepEqual(adds.map(c => [c.name, c.name === "claude" ? c.claudeHome : c.codexHome]), [["claude", claude], ["codex", caller]]);
+  assert.equal(registrationEnv(adds, "claude").CODEX_HOME, worker);
+  assert.equal(registrationEnv(adds, "codex").CODEX_HOME, worker);
+  assert.deepEqual(calls.filter(c => c.args.includes("exec")).map(c => c.codexHome), [worker]);
+  assert.ok(output.includes(`Codex ~/.codex-api = test calls Rosalind from ${worker} (profile rosalind_delegate)`));
+  assert.match(await readFile(join(caller, "config.toml"), "utf8"), /env_vars = \["WORKER_KEY", "ROSALIND_KEY"\]/);
+  for (const home of [caller, claude]) await access(join(home, "skills/rosalind-delegate/SKILL.md"));
+  assert.equal(await readFile(join(worker, "config.toml"), "utf8"), base);
+  assert.equal(await readFile(join(f.testHome, ".claude.json"), "utf8"), '{"unrelated":true}');
+  await assert.rejects(access(join(f.testHome, ".claude/skills")), {code:"ENOENT"});
+});
+
+test("copying a caller row fills the selected sibling homes and allows individual exceptions", async t => {
+  const f = await fixture(t);
+  await f.run(["--codex-mcp"]);
+  const api = await configuredHome(f, ".claude-api", ".claude.json", "{}");
+  const vhh = await configuredHome(f, "claude-vhh", ".claude.json", "{}");
+  // Three Claude homes plus the active Codex home. Copy Codex and Rosalind, then remove Rosalind from vhh.
+  const chooseHomes = "n " + down + " " + down + " " + down + " \n";
+  const { calls, output } = await f.run(["--skip-profile-checks"], chooseHomes + right + right + " p" + down + down + " \n");
+  assert.deepEqual(gridRow(output, "Claude Code ~/.claude-api", true), ["[x]", "-", "[x]", "[ ]"]);
+  assert.deepEqual(gridRow(output, "Claude Code ~/claude-vhh", true), ["[x]", "-", "[ ]", "[ ]"]);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(join(api, ".claude.json"), "utf8")).mcpServers).sort(), ["codex-delegate", "rosalind-delegate"]);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(join(vhh, ".claude.json"), "utf8")).mcpServers), ["codex-delegate"]);
+  assert.ok(!calls.some(c => c.name !== "claude" && c.args[1] === "add"));
+});
+
+test("the home picker accepts an explicit new path and skips unchecked installed homes", async t => {
+  const f = await fixture(t);
+  await f.run(["--codex-mcp"]);
+  const previous = await readFile(join(f.testHome, ".claude.json"), "utf8");
+  const custom = join(f.dir, "custom config", "new home");
+  const { output } = await f.run([], "1000\nn" + down + `+${custom}\n\n` + right + " \n");
+  assert.match(output, /Choose home numbers from the list/);
+  await access(join(custom, "skills/claude-delegate/SKILL.md"));
+  assert.match(await readFile(join(custom, "config.toml"), "utf8"), /\[mcp_servers\.claude-delegate\]/);
+  assert.equal(await readFile(join(f.testHome, ".claude.json"), "utf8"), previous);
+  await assert.rejects(access(join(f.testHome, ".codex/config.toml")), {code:"ENOENT"});
+  const skipped = await f.run([], "n\n");
+  assert.match(skipped.output, /Nothing selected/);
+  assert.doesNotMatch(skipped.output, /Caller \/ worker/);
+});
+
+test("--all selects the active homes plus only the extra cells explicitly requested", async t => {
+  const f = await fixture(t);
+  const alternate = await configuredHome(f, ".codex-api", "config.toml", "");
+  const target = `codex@${alternate}=claude`;
+  let previous = 0;
+  for (const args of [["--all", "--for", target], ["--for", target, "--all"]]) {
+    const { calls } = await f.run(args);
+    const adds = calls.slice(previous).filter(c => c.args[1] === "add");
+    assert.equal(adds.length, 12);
+    assert.deepEqual(adds.filter(c => c.name === "codex" && c.codexHome === alternate).map(c => c.args[2]), ["claude-delegate"]);
+    previous = calls.length;
+  }
+});
+
+test("unqualified flags use active homes while explicitly selected default Claude uses its global registry", async t => {
+  const f = await fixture(t);
+  const alternate = await configuredHome(f, ".claude-api", ".claude.json", "{}");
+  const { calls } = await f.run(["--codex-mcp", "--for", "claude@~/.claude=rosalind"], "", { CLAUDE_CONFIG_DIR: alternate });
+  const adds = calls.filter(c => c.args[1] === "add");
+  assert.deepEqual(adds.map(c => c.claudeHome), [alternate, undefined]);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(join(alternate, ".claude.json"), "utf8")).mcpServers), ["codex-delegate"]);
+  assert.deepEqual(Object.keys(JSON.parse(await readFile(join(f.testHome, ".claude.json"), "utf8")).mcpServers), ["rosalind-delegate"]);
+  await access(join(alternate, "skills/codex-delegate/SKILL.md"));
+  await access(join(f.testHome, ".claude/skills/rosalind-delegate/SKILL.md"));
+});
+
+test("rerunning a qualified AGY installation uses that home's saved priority and retires Gemini only there", async t => {
+  const f = await fixture(t);
+  await f.run(["--for", "claude=agy", "--agy-model", "fixture-model"]);
+  const global = join(f.testHome, ".claude.json");
+  const previous = JSON.parse(await readFile(global, "utf8"));
+  previous.mcpServers["gemini-delegate"] = {command:"old"};
+  await writeFile(global, JSON.stringify(previous));
+  const alternate = await configuredHome(f, "claude-vhh", ".claude.json", JSON.stringify({mcpServers:{
+    "gemini-delegate":{command:"old"}, "agy-delegate":{command:"node", env:{AGY_MODELS:"other-model"}},
+  }}));
+  for (const home of [join(f.testHome, ".claude"), alternate]) await mkdir(join(home, "skills/gemini-delegate"), {recursive:true});
+  await f.run(["--for", `claude@${alternate}=agy`, "--skip-agy-check"], "", {AGY_MODEL:""});
+  const updated = JSON.parse(await readFile(join(alternate, ".claude.json"), "utf8")).mcpServers;
+  assert.equal(updated["agy-delegate"].env.AGY_MODELS, "other-model");
+  assert.equal(updated["gemini-delegate"], undefined);
+  await assert.rejects(access(join(alternate, "skills/gemini-delegate")), {code:"ENOENT"});
+  await access(join(f.testHome, ".claude/skills/gemini-delegate"));
+  assert.deepEqual(JSON.parse(await readFile(global, "utf8")), previous);
+});
+
+test("uninstall home selection and --home remove only the targeted registrations, skills and legacy settings", async t => {
+  const f = await fixture(t);
+  const claude = await configuredHome(f, ".claude-api", "settings.json", '{"permissions":{"allow":["Read","Bash(tmux send-keys:*)"]}}');
+  const codex = await configuredHome(f, ".codex-api", "config.toml", 'model = "keep"\n');
+  await f.run(["--both", "--for", `claude@${claude}=codex`, "--for", `codex@${codex}=claude`, "--for", "agy=codex"]);
+  const keep = [".claude.json", ".codex/config.toml", ".gemini/config/mcp_config.json",
+    ".claude/skills/codex-delegate/SKILL.md", ".codex/skills/claude-delegate/SKILL.md", ".gemini/antigravity-cli/skills/dual-agent-review/SKILL.md"];
+  const contents = () => Promise.all(keep.map(path => readFile(join(f.testHome, path), "utf8")));
+  const before = await contents();
+  await f.uninstall({ DUAL_AGENT_TEST_FAIL_COMMAND: "claude" }, [], "n" + down + " \n");
+  assert.deepEqual(JSON.parse(await readFile(join(claude, ".claude.json"), "utf8")).mcpServers, {});
+  assert.deepEqual(JSON.parse(await readFile(join(claude, "settings.json"), "utf8")).permissions.allow, ["Read"]);
+  await assert.rejects(access(join(claude, "skills/codex-delegate")), {code:"ENOENT"});
+  await access(join(codex, "skills/claude-delegate/SKILL.md"));
+  await f.uninstall({}, ["--home", `codex@${codex}`]);
+  assert.doesNotMatch(await readFile(join(codex, "config.toml"), "utf8"), /claude-delegate/);
+  await assert.rejects(access(join(codex, "skills/claude-delegate")), {code:"ENOENT"});
+  assert.deepEqual(await contents(), before);
+});
+
 test("unreadable detection data leaves manual selection available", async t => {
   const f = await fixture(t);
   await writeFile(join(f.testHome, ".claude.json"), "invalid JSON");
-  const { output } = await f.run([], "c");
+  const { output } = await f.grid("c");
   assert.match(output, /Could not read Claude registrations/);
   assert.match(output, /Nothing selected/);
 });
@@ -502,7 +767,7 @@ test("reverse registration failure stops setup", async (t) => {
 
 test("interactive Claude selection installs its MCP server and host skill independently", async (t) => {
   const f = await fixture(t, ["codex-pool"]);
-  const { calls, output } = await f.run([], down + right + " \n");
+  const { calls, output } = await f.grid(down + right + " \n");
   assert.equal(gridRow(output, "Codex", true)[1], "[x]");
   const registrations = calls.filter(call => call.args[0] === "mcp" && call.args[1] === "add");
   assert.equal(registrations.length, 1);
@@ -514,7 +779,7 @@ test("interactive Claude selection installs its MCP server and host skill indepe
 
 test("interactive selection can install both delegation directions", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], bothDirections + "\n");
+  const { calls } = await f.grid(bothDirections + "\n");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.equal(registrationEnv(calls, "codex").CLAUDE_BIN, join(f.dir, "bin/claude"));
   await access(join(f.testHome, ".claude/skills/codex-delegate/SKILL.md"));
@@ -523,7 +788,7 @@ test("interactive selection can install both delegation directions", async (t) =
 
 test("deselecting Claude delegation skips its registration and skill", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], bothDirections + " \n");
+  const { calls } = await f.grid(bothDirections + " \n");
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
   assert.ok(!calls.some(call => call.name === "codex" && call.args[1] === "add"));
   await assert.rejects(access(join(f.testHome, ".codex/skills/claude-delegate")), { code: "ENOENT" });
@@ -531,7 +796,7 @@ test("deselecting Claude delegation skips its registration and skill", async (t)
 
 test("select all includes Claude delegation with the other integrations", async (t) => {
   const f = await fixture(t);
-  const { calls } = await f.run([], "ac");
+  const { calls } = await f.grid("ac");
   const codexServers = calls.filter(call => call.name === "codex" && call.args[1] === "add").map(call => call.args[2]);
   assert.deepEqual(codexServers.sort(), ["agy-delegate", "claude-delegate", "codex-delegate", "rosalind-delegate"]);
   assert.equal(registrationEnv(calls, "claude").CODEX_BIN, "codex-pool");
@@ -694,7 +959,7 @@ for (const [provider, label, profile] of [
   test(`${label} verifies its profile by default for explicit and interactive setup`, async (t) => {
     const f = await fixture(t);
     let previousCalls = 0;
-    for (const [args, input] of [[[`--${provider}-mcp`], ""], [[], "c"]]) {
+    for (const [args, input] of [[[`--${provider}-mcp`], ""], [[], "\nc"]]) {
       const { calls, output } = await f.run(args, input);
       const recent = calls.slice(previousCalls);
       previousCalls = calls.length;
@@ -764,7 +1029,7 @@ test("ordinary Codex and Claude installation makes no profile requests", async (
 
 test("Antigravity setup prompts for a native model and registers both hosts without a Codex worker", async t => {
   const f = await fixture(t, ["codex-pool"]);
-  const { calls, output } = await f.run([], agyInBoth + "\n2\n", { AGY_MODEL: "" });
+  const { calls, output } = await f.grid(agyInBoth + "\n2\n", { AGY_MODEL: "" });
   assert.match(output, /Choose the Antigravity model/);
   assert.match(output, /Other Model/);
   for (const host of ["claude", "codex"]) {
@@ -797,14 +1062,36 @@ test("Antigravity interactive default is Hydrogen, Argon, Opus and preserves nat
   const settings = join(f.testHome, ".gemini/antigravity-cli/settings.json");
   await mkdir(join(settings, ".."), { recursive: true });
   await writeFile(settings, '{"model":"Other Model"}');
-  const { calls } = await f.run([], agyInBoth + "\n\n", { AGY_MODEL: "" });
+  const { calls } = await f.grid(agyInBoth + "\n\n", { AGY_MODEL: "" });
   assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODELS, "gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high");
   assert.equal(await readFile(settings, "utf8"), '{"model":"Other Model"}');
 });
 
+test("the AGY picker toggles models and moves the highlighted model earlier or later", async t => {
+  const f = await fixture(t);
+  // Choose two models, move the second to the front, then add and remove a third.
+  const keys = "n " + down + " " + left + right + left + down + "  \n";
+  const { calls, output } = await f.grid(agyInBoth + "\n" + keys, { AGY_MODEL: "" });
+  assert.match(output, /> \[1\] Other Model \(other-model\)/);
+  for (const caller of ["codex", "claude"]) {
+    assert.equal(registrationEnv(calls, caller, "agy-delegate").AGY_MODELS, "other-model,fixture-model");
+  }
+});
+
+test("quitting AGY model selection stops before live checks or installation", async t => {
+  const f = await fixture(t);
+  const log = join(f.dir, "installer.log");
+  const { calls, output } = await f.grid("a\nq", {AGY_MODEL:"", DUAL_AGENT_INSTALL_LOG:log});
+  assert.match(output, /Selection cancelled/);
+  assert.ok(calls.some(c => c.name === "agy" && c.args[0] === "models"));
+  assert.ok(!calls.some(c => c.name === "npm" || ["add", "remove"].includes(c.args[1]) ||
+    c.args.includes("exec") || c.args.some(arg => arg.startsWith("--print="))));
+  await assert.rejects(access(log + ".agy-models"), {code:"ENOENT"});
+});
+
 test("Antigravity accepts ordered menu selections and reuses the saved priority", async t => {
   const f = await fixture(t);
-  const first = await f.run([], agyInBoth + "\n2,1,2\n", { AGY_MODEL: "" });
+  const first = await f.grid(agyInBoth + "\n2,1,2\n", { AGY_MODEL: "" });
   for (const host of ["claude", "codex"]) assert.equal(registrationEnv(first.calls, host, "agy-delegate").AGY_MODELS, "other-model,fixture-model");
   const next = await f.run(["--agy-mcp", "--skip-agy-check"], "", { AGY_MODEL: "" });
   assert.equal(registrationEnv(next.calls.slice(first.calls.length), "codex", "agy-delegate").AGY_MODELS, "other-model,fixture-model");
@@ -820,7 +1107,7 @@ test("Antigravity explicit priorities override single-model settings and can be 
   const f = await fixture(t);
   const first = await f.run(["--agy-models", "other-model,fixture-model"]);
   assert.equal(registrationEnv(first.calls, "codex", "agy-delegate").AGY_MODELS, "other-model,fixture-model");
-  const reset = await f.run([], "cd\n", { AGY_MODEL: "" });
+  const reset = await f.grid("cd\n", { AGY_MODEL: "" });
   assert.equal(registrationEnv(reset.calls.slice(first.calls.length), "codex", "agy-delegate").AGY_MODELS, "gemini-4-hydrogen-xhigh,gemini-4-argon-high,claude-opus-5-5-high");
 });
 
@@ -865,7 +1152,7 @@ for (const [reason, overrides] of [
 
 test("Antigravity rejects invalid menu choices and supports skipping checks interactively", async t => {
   const f = await fixture(t);
-  const { calls, output } = await f.run(["--skip-profile-checks"], agyInBoth + "\n999\n2\n", { AGY_MODEL: "" });
+  const { calls, output } = await f.grid(agyInBoth + "\n999\n2\n", { AGY_MODEL: "" }, ["--skip-profile-checks"]);
   assert.match(output, /Choose a model number from the list/);
   assert.equal(registrationEnv(calls, "codex", "agy-delegate").AGY_MODEL, "other-model");
   assert.ok(!calls.some(call => call.args.some(arg => arg.startsWith("--print="))));

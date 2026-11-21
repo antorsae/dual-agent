@@ -9,10 +9,13 @@ npm ci
 npm run build
 ```
 
-Run `./setup-dual-agent.sh` from the repository root and select the workers
-for each caller in the grid. Use `--for agy=codex,claude,rosalind` to install
-those reviewers in the AGY TUI. Repeat `--for` for additional callers. Legacy
-flags such as `--both` select their original routes. For manual registration,
+Run `./setup-dual-agent.sh` from the repository root, choose caller homes, then
+select the workers for each home. Use `--for agy=codex,claude,rosalind` for AGY
+reviewers or `--for "codex@$HOME/.codex-api=claude,rosalind"` for an alternate
+Codex caller. Repeat `--for` for additional homes. The caller CLI registers in
+the specified home, and worker configuration and checks use the setup shell's
+`CODEX_HOME` or `CLAUDE_CONFIG_DIR`. Legacy flags such as `--both` select their
+original routes in the active caller homes. For manual registration,
 use the same absolute state directory for all workers.
 
 ```bash
@@ -79,7 +82,8 @@ Rosalind requires `$CODEX_HOME/rosalind_delegate.config.toml` (default:
 and sends one live request through it by default.
 
 Antigravity uses the native `agy` executable and model IDs from `agy models`.
-Setup prompts for an ordered list and persists comma-separated `AGY_MODELS`,
+The model picker uses Space to select and left/right to change priority.
+Setup persists comma-separated `AGY_MODELS`,
 the first model as legacy `AGY_MODEL`, and `AGY_BIN` in all selected host registrations.
 Use `--agy-models ID,ID,...` or `AGY_MODELS` for unattended installation;
 `--agy-model ID` / legacy `AGY_MODEL` select one model. Default priority is

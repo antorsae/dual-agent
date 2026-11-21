@@ -1,10 +1,28 @@
 #!/bin/bash
 # Sourced after the installer's logging and registration helpers.
+
+# Fill select_agy_model's AGY_PICK_ORDER with matching catalog indices in saved order.
+agy_restore_order() {
+    local csv="$1" id index
+    shift
+    local -a catalog_ids=("$@") requested=() seen=()
+    AGY_PICK_ORDER=()
+    [ -n "$csv" ] || return 0
+    IFS=',' read -r -a requested <<< "$csv"
+    for id in "${requested[@]}"; do
+        for index in "${!catalog_ids[@]}"; do
+            [ "${catalog_ids[$index]}" = "$id" ] || continue
+            if [ "${seen[$index]:-0}" -eq 0 ]; then AGY_PICK_ORDER+=("$index"); seen[$index]=1; fi
+            break
+        done
+    done
+}
+
 select_agy_model() {
-    local catalog="${INSTALL_LOG}.agy-models" id label choice index number normalized
-    local requested="${AGY_MODELS:-${AGY_MODEL:-}}" saved defaults selection default_numbers=""
+    local catalog="${INSTALL_LOG}.agy-models" id label index normalized rank adjacent marker style
+    local requested="${AGY_MODELS:-${AGY_MODEL:-}}" saved defaults selection notice="" count
     local policy="$SCRIPT_DIR/agent/src/agyModels.mjs"
-    local -a ids=() labels=() selected=() numbers=()
+    local -a ids=() labels=() AGY_PICK_ORDER=() ranks=()
     saved="$(saved_worker_env agy-delegate AGY_MODELS)"
     if [ -z "$saved" ]; then saved="$(saved_worker_env agy-delegate AGY_MODEL)"; fi
     if ! "$DELEGATE_AGY_BIN" models > "$catalog" 2>> "$INSTALL_LOG"; then
@@ -20,37 +38,57 @@ select_agy_model() {
     if [ -n "$requested" ]; then
         selection="$requested"
     elif [ "$INTERACTIVE_INSTALL" -eq 1 ] || [ -t 0 ]; then
-        echo "Choose the Antigravity model priority list for agy-delegate:"
-        echo "Default order: Hydrogen XHigh > Argon High > Opus 5.5 High (available models only)."
-        for index in "${!ids[@]}"; do
-            printf '  %s) %s (%s)\n' "$((index + 1))" "${labels[$index]}" "${ids[$index]}"
-        done
-        IFS=',' read -r -a selected <<< "$selection"
-        for id in "${selected[@]}"; do
-            for index in "${!ids[@]}"; do
-                if [ "$id" = "${ids[$index]}" ]; then default_numbers+="${default_numbers:+,}$((index + 1))"; fi
-            done
-        done
+        count=${#ids[@]}
+        agy_restore_order "$selection" "${ids[@]}"
+        picker_open
         while true; do
-            printf 'Model numbers in priority order, comma-separated%s (d = default order): ' "${default_numbers:+ [Enter: $default_numbers]}"
-            if ! read -r choice; then fail "No models selected. Set AGY_MODELS or pass --agy-models ID,ID for unattended setup."; fi
-            if [ "$choice" = d ] || [ "$choice" = D ]; then
-                selection="$defaults"
-            else
-                choice="${choice:-$default_numbers}"
-                choice="${choice// /}"
-                selection=""
-                if [[ "$choice" =~ ^[0-9]+(,[0-9]+)*$ ]]; then
-                    IFS=',' read -r -a numbers <<< "$choice"
-                    for number in "${numbers[@]}"; do
-                        if [ "${#number}" -gt 3 ] || [ "$((10#$number))" -lt 1 ] || [ "$((10#$number))" -gt "${#ids[@]}" ]; then selection=""; break; fi
-                        selection+="${selection:+,}${ids[$((10#$number - 1))]}"
-                    done
-                fi
-            fi
-            [ -n "$selection" ] && break
-            echo "Choose a model number from the list, or several numbers in priority order."
+            ranks=()
+            for rank in "${!AGY_PICK_ORDER[@]}"; do
+                index=${AGY_PICK_ORDER[$rank]}
+                ranks[$index]=$((rank + 1))
+            done
+            picker_frame "$count" 4
+            picker_hint 2 "Choose the Antigravity model priority. [1] runs first."
+            picker_hint 1 "↑↓ move   Space toggle   Enter use order   q quit"
+            picker_hint 4 "← earlier   → later   d default   n clear"
+            for ((index=PICKER_FIRST; index<PICKER_END; index++)); do
+                marker=' '; style=''
+                if [ "$index" -eq "$PICKER_ROW" ]; then marker='>'; style=focus; fi
+                picker_line "$marker [${ranks[$index]:- }] ${labels[$index]} (${ids[$index]})" "$style"
+            done
+            picker_hint 3 "${notice:-${#AGY_PICK_ORDER[@]} selected   Models $((PICKER_FIRST + 1))–$PICKER_END of $count}"
+            notice=""
+            picker_read_key
+            if [ "$PICKER_KEY" = cancel ]; then rm -f "$catalog"; fi
+            if picker_move "$count"; then continue; fi
+            rank=$((${ranks[$PICKER_ROW]:-0} - 1))
+            case "$PICKER_KEY" in
+                enter)
+                    if [ "${#AGY_PICK_ORDER[@]}" -gt 0 ]; then break; fi
+                    notice="Select at least one model with Space." ;;
+                space)
+                    if [ "$rank" -lt 0 ]; then AGY_PICK_ORDER+=("$PICKER_ROW")
+                    else AGY_PICK_ORDER=("${AGY_PICK_ORDER[@]:0:rank}" "${AGY_PICK_ORDER[@]:rank+1}"); fi ;;
+                left|right)
+                    if [ "$rank" -lt 0 ]; then notice="Press Space to add this model to the order."; continue; fi
+                    if [ "$PICKER_KEY" = left ]; then adjacent=$((rank - 1)); else adjacent=$((rank + 1)); fi
+                    if [ "$adjacent" -ge 0 ] && [ "$adjacent" -lt "${#AGY_PICK_ORDER[@]}" ]; then
+                        AGY_PICK_ORDER[$rank]="${AGY_PICK_ORDER[$adjacent]}"
+                        AGY_PICK_ORDER[$adjacent]=$PICKER_ROW
+                    fi ;;
+                n|N) AGY_PICK_ORDER=() ;;
+                d|D) agy_restore_order "$defaults" "${ids[@]}" ;;
+                [0-9])
+                    picker_prompt "Catalog numbers in priority order: $PICKER_KEY"
+                    if picker_number_list "$PICKER_KEY$PICKER_INPUT" "$count"; then
+                        AGY_PICK_ORDER=("${PICKER_NUMBERS[@]}"); break
+                    fi
+                    notice="Choose a model number from the list, or several numbers in priority order." ;;
+            esac
         done
+        picker_close
+        selection=""
+        for index in "${AGY_PICK_ORDER[@]}"; do selection+="${selection:+,}${ids[$index]}"; done
     fi
     [ -n "$selection" ] || fail "No default models are available. Select models with --agy-models ID,ID or AGY_MODELS."
     if ! normalized="$(node "$policy" validate "$selection" "$catalog")"; then

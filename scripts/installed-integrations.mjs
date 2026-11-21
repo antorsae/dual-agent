@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 
 function registrations(file, host) {
@@ -12,31 +12,28 @@ function registrations(file, host) {
   }
 }
 
-const args = process.argv.slice(2);
-if (args[0] === "--env") {
-  const [, claudeConfig, agyConfig, server, key] = args;
-  for (const [file, host] of [[claudeConfig, "Claude"], [agyConfig, "AGY"]]) {
-    const value = registrations(file, host)[server]?.env?.[key];
-    if (typeof value === "string" && value) { process.stdout.write(value); break; }
-  }
-} else {
-  const [claudeConfig, codexHome, agyConfig, ...cells] = args;
-  const hosts = { claude: registrations(claudeConfig, "Claude"), agy: registrations(agyConfig, "AGY") };
-  function codexHas(server) {
-    if (!existsSync(join(codexHome, "config.toml"))) return false;
-    // Codex parses its own TOML, without starting the server or using project settings.
-    const result = spawnSync("codex", ["mcp", "get", server, "--json"], {
-      env: { ...process.env, CODEX_HOME: codexHome }, cwd: codexHome,
-      encoding: "utf8", timeout: 3000, maxBuffer: 1024 * 1024,
-    });
-    if (result.status !== 0) return false;
-    try { return JSON.parse(result.stdout).name === server; } catch { return false; }
-  }
-  cells.forEach((cell, index) => {
-    if (!cell) return;
-    const [host, worker] = cell.split("=");
+function codexHas(file, server) {
+  if (!existsSync(file)) return false;
+  // Codex parses its own TOML without starting the server or using this project's config.
+  const home = dirname(file);
+  const result = spawnSync("codex", ["mcp", "get", server, "--json"], {
+    env: { ...process.env, CODEX_HOME: home }, cwd: home,
+    encoding: "utf8", timeout: 3000, maxBuffer: 1024 * 1024,
+  });
+  if (result.status !== 0) return false;
+  try { return JSON.parse(result.stdout).name === server; } catch { return false; }
+}
+
+const [action, host, file, ...args] = process.argv.slice(2);
+const servers = host === "codex" ? {} : registrations(file, host === "claude" ? "Claude" : "AGY");
+if (action === "--env") {
+  const [server, key] = args;
+  const value = servers[server]?.env?.[key];
+  if (typeof value === "string") process.stdout.write(value);
+} else if (action === "--installed") {
+  args.forEach((worker, index) => {
     const server = `${worker}-delegate`;
-    const installed = host === "codex" ? codexHas(server) : Object.hasOwn(hosts[host] ?? {}, server) && !!hosts[host][server];
+    const installed = host === "codex" ? codexHas(file, server) : !!servers[server];
     if (installed) console.log(index);
   });
 }

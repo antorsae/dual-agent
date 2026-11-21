@@ -10,6 +10,8 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/integrations.sh"
+source "$SCRIPT_DIR/scripts/terminal-picker.sh"
+source "$SCRIPT_DIR/scripts/caller-homes.sh"
 source "$SCRIPT_DIR/scripts/setup-grid.sh"
 VERBOSE="${DUAL_AGENT_VERBOSE:-0}"
 INSTALL_LOG="${DUAL_AGENT_INSTALL_LOG:-${TMPDIR:-/tmp}/dual-agent-setup-$$.log}"
@@ -17,11 +19,6 @@ VERIFY_ROSALIND_PROFILE="${ROSALIND_VERIFY_PROFILE:-1}"
 VERIFY_AGY="${AGY_VERIFY_MODEL:-${GEMINI_VERIFY_PROFILE:-1}}"
 INTERACTIVE_INSTALL=0
 INSTALL_REQUESTED=0
-SELECTED=()
-for index in "${!CELLS[@]}"; do SELECTED+=(0); done
-DELEGATE_CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
-CLAUDE_REGISTRY="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
-AGY_REGISTRY="$HOME/.gemini/config/mcp_config.json"
 IMPLY_ROSALIND=0
 IMPLY_AGY=0
 
@@ -89,8 +86,10 @@ show_log_tail() {
 
 show_help() {
     echo "Usage: $0 [options]"
-    echo "Without arguments, select callers and workers in the grid. Each installed registration is preselected."
-    echo "  --for HOST=WORKER,...  Repeat to select cells in more than one caller row"
+    echo "Without arguments, use the arrow keys, Space and Enter to choose caller homes and workers. Installed registrations are preselected per home."
+    echo "  --for HOST[@HOME]=WORKER,...  Repeat for different homes or callers"
+    echo '    --for "claude@$HOME/claude-vhh=codex,rosalind" --for "codex@$HOME/.codex-api=claude,agy"'
+    echo "  An unqualified caller uses its active home. CODEX_HOME and CLAUDE_CONFIG_DIR select the worker homes for this run."
     echo "  Callers: claude, codex, agy. Workers: codex, claude, rosalind, agy. Claude Code can call Codex, Rosalind and AGY."
     echo "  AGY TUI provides read-only reviews and plan reviews from the selected workers."
     echo "  --codex-mcp            Codex in Claude Code"
@@ -99,7 +98,7 @@ show_help() {
     echo "  --rosalind-mcp         Rosalind in Claude Code and Codex"
     echo "  --agy-mcp              Antigravity in Claude Code and Codex"
     echo "  --both                 The two original delegation directions"
-    echo "  --all                  Every supported caller/worker cell"
+    echo "  --all                  Every supported cell in the active caller homes"
     echo "  --skip-profile-checks  Skip live Rosalind and Antigravity checks"
     echo "  --skip-rosalind-profile-check Skip only the live Rosalind check"
     echo "  --skip-agy-check        Skip the live Antigravity model check"
@@ -112,12 +111,17 @@ show_help() {
     echo "Live checks are enabled by default; Antigravity tries the next model on quota exhaustion."
 }
 
+init_homes || fail "Could not resolve the active caller homes."
+# Registration commands receive their caller home separately. Workers use the
+# configuration home selected by the environment that launched setup.
+DELEGATE_CODEX_HOME="$ACTIVE_CODEX_HOME"
+
 while [ "$#" -gt 0 ]; do
     setup_arg="$1"
     shift
     case "$setup_arg" in
-        --for) [ "$#" -gt 0 ] || fail "--for requires HOST=WORKER,WORKER."; select_for "$1"; shift ;;
-        --all) select_all 1; INSTALL_REQUESTED=1 ;;
+        --for) [ "$#" -gt 0 ] || fail "--for requires HOST[@HOME]=WORKER,WORKER."; select_for "$1"; shift ;;
+        --all) for row in "${ACTIVE_ROWS[@]}"; do set_row "$row" 1; done; INSTALL_REQUESTED=1 ;;
         --both) select_for claude=codex; select_for codex=claude ;;
         --mcp|--codex-mcp) select_for claude=codex ;;
         --claude-mcp) select_for codex=claude ;;
@@ -143,6 +147,7 @@ echo -e "${BLUE}Dual Agent Environment Setup${NC}"
 if [ "$INSTALL_REQUESTED" -eq 0 ]; then
     INTERACTIVE_INSTALL=1
     echo "Live checks are enabled unless skipped."
+    choose_homes "receive integrations" next
     choose_from_grid
 fi
 
@@ -163,10 +168,11 @@ for index in "${!CELLS[@]}"; do
         agy) NEED_AGY_HOST=1 ;;
     esac
     case "$INTEGRATION_PROVIDER" in
-        claude) NEED_CLAUDE_WORKER=1 ;;
-        agy) NEED_AGY_WORKER=1 ;;
-        *) NEED_CODEX_WORKER=1 ;;
+        claude) NEED_CLAUDE_WORKER=1; worker_home="$ACTIVE_CLAUDE_HOME" ;;
+        agy) NEED_AGY_WORKER=1; worker_home="$AGY_HOME" ;;
+        *) NEED_CODEX_WORKER=1; worker_home="$DELEGATE_CODEX_HOME" ;;
     esac
+    printf '  %s calls %s from %s%s\n' "$INTEGRATION_HOST_LABEL" "$INTEGRATION_LABEL" "$worker_home" "${INTEGRATION_PROFILE:+ (profile $INTEGRATION_PROFILE)}"
 done
 if [ "$SELECTION_COUNT" -eq 0 ]; then
     echo "Nothing selected. Exiting."
@@ -236,15 +242,6 @@ verify_codex_profile() {
         return 1
     fi
 }
-if worker_selected rosalind; then
-    case "$VERIFY_ROSALIND_PROFILE" in
-        0) echo "  Live Rosalind profile check: skipped" ;;
-        1) run_step "Live Rosalind profile check (one request)" verify_codex_profile rosalind rosalind_delegate ||
-            fail "The live Rosalind profile check failed. Fix the profile or use --skip-rosalind-profile-check to skip verification." ;;
-        *) fail "Rosalind profile verification must be 0 or 1." ;;
-    esac
-fi
-
 install_skill() {
     local source="$1" destination="$2"
     mkdir -p "$destination" && cp -R "$source/." "$destination/"
@@ -271,7 +268,7 @@ codex_env_keys() {
 # codex mcp add cannot set env_vars, so insert it below the server's table
 # header. Rewriting in place keeps the file's mode and any symlink.
 add_codex_env_vars() {
-    local server="$1" keys="$2" config="$DELEGATE_CODEX_HOME/config.toml"
+    local server="$1" keys="$2" config="$3/config.toml"
     local line name list="" found=0
     local -a lines=()
     for name in $keys; do list+="${list:+, }\"$name\""; done
@@ -289,7 +286,7 @@ add_codex_env_vars() {
 
 # Read a value saved in a Codex MCP registration's [mcp_servers.<name>.env] table.
 codex_registration_env() {
-    local server="$1" key="$2" config="$DELEGATE_CODEX_HOME/config.toml" line section=""
+    local server="$1" key="$2" config="$3" line section=""
     local pattern="^${key}[[:space:]]*=[[:space:]]*\"([^\"]*)\""
     [ -f "$config" ] || return 0
     while IFS= read -r line || [ -n "$line" ]; do
@@ -302,29 +299,52 @@ codex_registration_env() {
 }
 
 saved_worker_env() {
-    local value
-    value="$(codex_registration_env "$1" "$2")"
-    if [ -n "$value" ]; then printf '%s' "$value"; return; fi
-    node "$SCRIPT_DIR/scripts/installed-integrations.mjs" --env "$CLAUDE_REGISTRY" "$AGY_REGISTRY" "$1" "$2"
+    local server="$1" key="$2" host index row registry value
+    local -a sources=() seen=()
+    # Prefer registrations for this worker in the selected homes, retaining
+    # the original Codex-first precedence. Other active homes are a fallback.
+    for host in codex claude agy; do
+        for index in "${!CELLS[@]}"; do
+            if [ "${SELECTED[$index]}" -eq 1 ] && [ "${CELLS[$index]}" = "$host=${server%-delegate}" ]; then
+                sources+=("$((index / ${#WORKERS[@]}))")
+            fi
+        done
+    done
+    for host in codex claude agy; do
+        for row in "${ACTIVE_ROWS[@]}"; do
+            if [ "${CALLERS[$row]}" = "$host" ]; then sources+=("$row"); fi
+        done
+    done
+    for row in "${sources[@]}"; do
+        [ "${seen[$row]:-0}" -eq 0 ] || continue
+        seen[$row]=1
+        host="${CALLERS[$row]}"
+        registry="$(caller_registry "$host" "${CALLER_HOMES[$row]}")"
+        [ -s "$registry" ] || continue
+        if [ "$host" = codex ]; then value="$(codex_registration_env "$server" "$key" "$registry")"
+        else value="$(node "$SCRIPT_DIR/scripts/installed-integrations.mjs" --env "$host" "$registry" "$server" "$key")"; fi
+        if [ -n "$value" ]; then printf '%s' "$value"; return 0; fi
+    done
+    return 0
 }
 
 forward_codex_keys() {
-    local server="$1" keys
-    shift
+    local server="$1" caller_home="$2" keys
+    shift 2
     keys="$(codex_env_keys "$@")"
     [ -n "$keys" ] || return 0
-    if ! run_step "$server API key forwarding ($keys)" add_codex_env_vars "$server" "$keys"; then
-        fail "Could not add env_vars = [$keys] to [mcp_servers.$server] in $DELEGATE_CODEX_HOME/config.toml."
+    if ! run_step "$server API key forwarding ($keys)" add_codex_env_vars "$server" "$keys" "$caller_home"; then
+        fail "Could not add env_vars = [$keys] to [mcp_servers.$server] in $caller_home/config.toml."
     fi
 }
 
 register_integration() {
-    local host="$1" provider="$2" profile="$3" server="$2-delegate" destination
+    local host="$1" provider="$2" profile="$3" caller_home="$4" server="$2-delegate"
     local entrypoint="$AGENT_DIR/dist/$(server_entrypoint "$provider" "$host")"
     local -a server_env=(--env "DUAL_AGENT_STATE_DIR=$DELEGATE_STATE_DIR")
     if [ "$provider" = "claude" ]; then
         server_env+=(--env "CLAUDE_BIN=$DELEGATE_CLAUDE_BIN")
-        if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then server_env+=(--env "CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR"); fi
+        if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then server_env+=(--env "CLAUDE_CONFIG_DIR=$ACTIVE_CLAUDE_HOME"); fi
         if [ -n "$CLAUDE_WORKER_EFFORT" ]; then server_env+=(--env "CLAUDE_CODE_EFFORT_LEVEL=$CLAUDE_WORKER_EFFORT"); fi
     elif [ "$provider" = "agy" ]; then
         server_env+=(--env "AGY_BIN=$DELEGATE_AGY_BIN" --env "AGY_MODELS=$DELEGATE_AGY_MODELS" --env "AGY_MODEL=$DELEGATE_AGY_MODEL")
@@ -334,35 +354,44 @@ register_integration() {
         server_env+=(--env "CODEX_BIN=$worker_bin" --env "CODEX_HOME=$DELEGATE_CODEX_HOME")
     fi
     if [ "$host" = "claude" ]; then
-        destination="$HOME/.claude/skills/$server"
-        run_logged claude mcp remove "$server" --scope user || true
-        run_step "$server → Claude Code" claude mcp add --scope user "$server" "${server_env[@]}" -- node "$entrypoint" ||
+        run_logged caller_cli "$host" "$caller_home" mcp remove "$server" --scope user || true
+        run_step "$server → $INTEGRATION_HOST_LABEL" caller_cli "$host" "$caller_home" mcp add --scope user "$server" "${server_env[@]}" -- node "$entrypoint" ||
             fail "Could not register $server for Claude. Fix the Claude CLI error above and rerun setup."
     elif [ "$host" = "agy" ]; then
         # The AGY-specific entrypoint advertises and accepts read-only reviews only.
-        run_step "$server → AGY TUI" "$DELEGATE_AGY_BIN" mcp add "${server_env[@]}" "$server" -- "$(command -v node)" "$entrypoint" "$provider" ||
+        run_step "$server → AGY TUI" caller_cli "$host" "$caller_home" mcp add "${server_env[@]}" "$server" -- "$(command -v node)" "$entrypoint" "$provider" ||
             fail "Could not register $server for AGY. Fix the AGY CLI error above and rerun setup."
         return 0
     else
-        destination="$DELEGATE_CODEX_HOME/skills/$server"
-        run_logged codex mcp remove "$server" || true
-        run_step "$server → Codex" codex mcp add "$server" "${server_env[@]}" -- node "$entrypoint" ||
+        run_logged caller_cli "$host" "$caller_home" mcp remove "$server" || true
+        run_step "$server → $INTEGRATION_HOST_LABEL" caller_cli "$host" "$caller_home" mcp add "$server" "${server_env[@]}" -- node "$entrypoint" ||
             fail "Could not register $server for Codex. Fix the Codex CLI error above and rerun setup."
         if [ "$provider" = "agy" ]; then
-            run_step "$server API key forwarding" add_codex_env_vars "$server" GEMINI_API_KEY || fail "Could not configure Antigravity key forwarding."
+            run_step "$server API key forwarding" add_codex_env_vars "$server" GEMINI_API_KEY "$caller_home" || fail "Could not configure Antigravity key forwarding."
         elif [ "$provider" != "claude" ]; then
             local -a key_sources=("$DELEGATE_CODEX_HOME/config.toml")
             if [ -n "$profile" ]; then key_sources+=("$DELEGATE_CODEX_HOME/$profile.config.toml"); fi
-            forward_codex_keys "$server" "${key_sources[@]}"
+            forward_codex_keys "$server" "$caller_home" "${key_sources[@]}"
         fi
     fi
-    run_step "$server $host skill" install_skill "$SCRIPT_DIR/.$host/skills/$server" "$destination" ||
+    run_step "$server $host skill" install_skill "$SCRIPT_DIR/.$host/skills/$server" "$caller_home/skills/$server" ||
         fail "Could not install the $host $server skill."
 }
 
 source "$SCRIPT_DIR/scripts/agy-setup.sh"
+if [ "$NEED_AGY_WORKER" -eq 1 ]; then select_agy_model; fi
+
+# A user can still quit on the model screen. Start live worker checks after
+# all selections have been accepted.
+if worker_selected rosalind; then
+    case "$VERIFY_ROSALIND_PROFILE" in
+        0) echo "  Live Rosalind profile check: skipped" ;;
+        1) run_step "Live Rosalind profile check (one request)" verify_codex_profile rosalind rosalind_delegate ||
+            fail "The live Rosalind profile check failed. Fix the profile or use --skip-rosalind-profile-check to skip verification." ;;
+        *) fail "Rosalind profile verification must be 0 or 1." ;;
+    esac
+fi
 if [ "$NEED_AGY_WORKER" -eq 1 ]; then
-    select_agy_model
     case "$VERIFY_AGY" in
         0) echo "  Live Antigravity model check: skipped" ;;
         1) run_step "Live Antigravity model check" verify_agy_model || fail "Antigravity model check failed. Fix authentication/model selection or use --skip-agy-check." ;;
@@ -376,6 +405,7 @@ build_agent() { (cd "$AGENT_DIR" && npm ci && npm run build); }
 run_step "MCP servers" build_agent || fail "Agent install/build failed."
 
 # Check every selected artifact before replacing any existing registration.
+caller_destinations=()
 for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
     load_cell "$index"
@@ -385,12 +415,17 @@ for index in "${!CELLS[@]}"; do
     if [ "$host" != agy ]; then
         skill="$SCRIPT_DIR/.$host/skills/$INTEGRATION_PROVIDER-delegate/SKILL.md"
         [ -f "$skill" ] || fail "Skill not found: $skill"
+        caller_destinations[$((index / ${#WORKERS[@]}))]="$INTEGRATION_HOME"
     fi
 done
 if [ "$NEED_AGY_HOST" -eq 1 ]; then
     AGY_REVIEW_SKILL="$SCRIPT_DIR/.agy/skills/dual-agent-review"
     [ -f "$AGY_REVIEW_SKILL/SKILL.md" ] || fail "Skill not found: $AGY_REVIEW_SKILL/SKILL.md"
 fi
+for row in "${!caller_destinations[@]}"; do
+    destination="${caller_destinations[$row]}"
+    mkdir -p -- "$destination" || fail "Cannot create caller home: $destination"
+done
 
 # Read the saved effort before removing Claude's registration.
 CLAUDE_WORKER_EFFORT=""
@@ -401,20 +436,23 @@ echo -e "${BLUE}[3/4]${NC} Registering integrations"
 for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
     load_cell "$index"
-    register_integration "$INTEGRATION_HOST" "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE"
+    register_integration "$INTEGRATION_HOST" "$INTEGRATION_PROVIDER" "$INTEGRATION_PROFILE" "$INTEGRATION_HOME"
 done
 if [ "$NEED_AGY_HOST" -eq 1 ]; then
-    run_step "AGY TUI review skill" install_skill "$AGY_REVIEW_SKILL" "$HOME/.gemini/antigravity-cli/skills/dual-agent-review" ||
+    run_step "AGY TUI review skill" install_skill "$AGY_REVIEW_SKILL" "$AGY_HOME/skills/dual-agent-review" ||
         fail "Could not install the AGY TUI review skill."
 fi
 
 # Retire the legacy Gemini registration only in hosts selected for its replacement.
 for index in "${!CELLS[@]}"; do
     [ "${SELECTED[$index]}" -eq 1 ] || continue
+    load_cell "$index"
     case "${CELLS[$index]}" in
-        claude=agy) run_logged claude mcp remove gemini-delegate --scope user || true; rm -rf "$HOME/.claude/skills/gemini-delegate" ;;
-        codex=agy) run_logged codex mcp remove gemini-delegate || true; rm -rf "$DELEGATE_CODEX_HOME/skills/gemini-delegate" ;;
+        claude=agy) run_logged caller_cli claude "$INTEGRATION_HOME" mcp remove gemini-delegate --scope user || true ;;
+        codex=agy) run_logged caller_cli codex "$INTEGRATION_HOME" mcp remove gemini-delegate || true ;;
+        *) continue ;;
     esac
+    rm -rf "$INTEGRATION_HOME/skills/gemini-delegate"
 done
 
 echo -e "${BLUE}[4/4]${NC} Finalizing"
@@ -431,8 +469,14 @@ for index in "${!CELLS[@]}"; do
     fi
     echo "Jobs: ${prefix}_status, ${prefix}_list, ${prefix}_cancel"
     if [ -n "$INTEGRATION_PROFILE" ]; then echo "Codex profile: $INTEGRATION_PROFILE"; fi
-    if [ "$INTEGRATION_HOST" = agy ]; then echo "Check registration: agy mcp list"
-    else echo "Check registration: $INTEGRATION_HOST mcp get $INTEGRATION_PROVIDER-delegate"; fi
+    case "$INTEGRATION_HOST" in
+        agy) echo "Check registration: agy mcp list" ;;
+        codex) printf 'Check registration: CODEX_HOME=%q codex mcp get %s-delegate\n' "$INTEGRATION_HOME" "$INTEGRATION_PROVIDER" ;;
+        claude)
+            if uses_default_claude_registry "$INTEGRATION_HOME"; then printf 'Check registration: env -u CLAUDE_CONFIG_DIR '
+            else printf 'Check registration: CLAUDE_CONFIG_DIR=%q ' "$INTEGRATION_HOME"; fi
+            printf 'claude mcp get %s-delegate\n' "$INTEGRATION_PROVIDER" ;;
+    esac
 done
 if [ -n "$CLAUDE_WORKER_EFFORT" ]; then echo "Claude worker effort: $CLAUDE_WORKER_EFFORT"; fi
 if [ "$NEED_AGY_WORKER" -eq 1 ]; then

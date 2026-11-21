@@ -4,7 +4,13 @@ Use **Claude Code**, **Codex**, or the **Antigravity TUI** to request independen
 
 ## Installation
 
-Install Node.js with npm and authenticate the CLIs you want to use as callers or workers. Run `./setup-dual-agent.sh` to open the grid. Each cell selects one worker for one caller. Existing registrations appear checked in their own row.
+Install Node.js with npm and authenticate the CLIs you want to use as callers or workers. Run `./setup-dual-agent.sh` to open the home picker. Use **↑ / ↓** to move the highlight, **Space** to check or uncheck a home, and **Enter** to continue to its workers. Long lists scroll as you move. **Page Up / Page Down** moves a page, and **Home / End** jumps to either end. Press **q** or **Esc** to leave setup before installation.
+
+Use **a** to check every home or **n** to clear the checks. Press **+** on a Claude or Codex row to enter a custom path for that caller. You can also enter `claude@/path` or `codex@/path` in the path prompt.
+
+Setup checks the active `CLAUDE_CONFIG_DIR` and `CODEX_HOME`, their standard locations, and matching directories directly under your home. It recognizes `.claude-*` and `claude-*` directories containing `.claude.json` or `settings.json`, and `.codex-*` and `codex-*` directories containing `config.toml`. Symlinks to the same home share one row. The active homes and homes with existing delegate registrations start checked. AGY uses one global home. For a custom home outside these locations, supply its path again on later runs.
+
+The worker grid has one row per selected home. Its header lists the checked caller homes by CLI and shows the configuration homes used by Codex, Rosalind, and Claude workers. When the full list would crowd the grid, the header shows the caller and worker homes for the highlighted cell. Existing registrations are checked in their caller's row.
 
 | Caller | Codex worker | Claude worker | Rosalind worker | AGY worker |
 |---|---|---|---|---|
@@ -12,9 +18,12 @@ Install Node.js with npm and authenticate the CLIs you want to use as callers or
 | Codex | Delegation | Delegation | Delegation | Delegation |
 | AGY TUI | Read-only reviews | Read-only reviews | Read-only reviews | Read-only reviews |
 
-Use the arrow keys to move, **Space** to toggle a cell, **r** to toggle its row,
-**a** to select all supported cells, and **n** to clear the selection. Press
-**Enter** to install the checked cells. Clearing a cell skips it for this run.
+The worker grid uses the same scrolling controls. Use **← / →** to choose a worker
+column, **Space** to toggle a cell, and **r** to toggle its row.
+Press **p** to copy that row to the other selected homes of the same caller.
+Use **a** to select all supported cells and **n** to clear the selection. Press
+**Enter** to apply the checked cells. Choosing an AGY worker opens its model
+picker when you have not already supplied a model order. Clearing a cell skips it for this run.
 Removal is a separate action through the uninstall script.
 
 For example, this installs three reviewers in the AGY TUI:
@@ -22,6 +31,23 @@ For example, this installs three reviewers in the AGY TUI:
 ```bash
 ./setup-dual-agent.sh --for agy=codex,claude,rosalind
 ```
+
+To choose specific caller homes in one command, qualify each caller with `@HOME`.
+
+```bash
+./setup-dual-agent.sh \
+  --for "claude@$HOME/claude-vhh=codex,rosalind" \
+  --for "codex@$HOME/.codex-api=claude,agy"
+```
+
+Each registration and host skill goes into the selected caller home. The workers
+read configuration from the `CODEX_HOME` and `CLAUDE_CONFIG_DIR` of the shell
+that runs setup. Each worker CLI handles authentication. With the default worker
+settings, selecting
+`codex@~/.codex-api=rosalind` installs Rosalind in `~/.codex-api` and uses the
+profile in `~/.codex/rosalind_delegate.config.toml`. Setup prints both locations
+before checking the workers. Unqualified callers and legacy flags use the active
+caller homes. `--all` selects every supported worker in those active homes.
 
 The AGY TUI exposes code and plan reviews plus status, list, and cancel for those
 reviews. Selecting the AGY worker in that row also enables `delegate_agy_models`
@@ -64,10 +90,12 @@ Rosalind setup requires the Codex profile file
 
 Antigravity setup requires the native `agy` CLI. Sign in once with `agy`, then
 select an Antigravity worker cell or run `./setup-dual-agent.sh --agy-mcp` in a terminal.
-Setup lists the models returned by `agy models` and asks for model numbers in
-priority order, such as `4,2,7`. The initial default is **Hydrogen XHigh → Argon
-High → Opus 5.5 High**, using the available models from that list. Reruns retain
-the saved priority; enter `d` to restore the default. For unattended setup:
+The AGY model picker shows each selected model's rank. **Space** adds a model
+to the end of the order or removes it. **← / →** moves the highlighted model
+earlier or later. **Enter** accepts the order. The initial default is **Hydrogen
+XHigh → Argon High → Opus 5.5 High**, filtered to the models returned by
+`agy models`. Reruns show the saved order. Press **d** to restore the default.
+For unattended setup, pass the model IDs directly.
 
 ```bash
 agy models
@@ -306,15 +334,19 @@ codex mcp get agy-delegate
 agy mcp list
 ```
 
-Claude Code stores user registrations in `~/.claude.json`, Codex in its config directory, and the AGY TUI in `~/.gemini/config/mcp_config.json`. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).
+With its default configuration, Claude Code stores user registrations in `~/.claude.json`. A custom `CLAUDE_CONFIG_DIR` has its own `.claude.json`. Codex stores them in its home’s `config.toml`, and the AGY TUI uses `~/.gemini/config/mcp_config.json`. The registration commands and server entrypoints are documented in [agent/README.md](agent/README.md).
 
 For a blocked edit, inspect the active job and cancel it if appropriate. After an interrupted process, inspect existing changes before retrying. The lock remains if a worker might still be alive or its termination is unknown; recovery does not kill processes based on stored PIDs. Corrupt locks and interrupted lock recovery require inspection rather than automatic deletion.
 
 ```bash
 ./uninstall-dual-agent.sh
+./uninstall-dual-agent.sh --home "claude@$HOME/claude-vhh" --home "codex@$HOME/.codex-api"
 ```
 
-Uninstall removes all delegation registrations and installed skills. It preserves project files and saved job data.
+Uninstall offers the same scrollable home picker. **Enter** removes the checked
+homes' integrations and **q** leaves the picker before removal. Repeat `--home` to choose destinations
+directly, or use `--home agy` for the AGY TUI. Uninstall removes delegation
+registrations and skills from the selected homes and preserves saved job data.
 
 ## Development
 

@@ -9,26 +9,26 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/integrations.sh"
+source "$SCRIPT_DIR/scripts/terminal-picker.sh"
+source "$SCRIPT_DIR/scripts/caller-homes.sh"
 REMOVED=0
-CLAUDE_SERVERS=()
-CODEX_SERVERS=()
+
+fail() { echo "$*" >&2; exit 1; }
 
 remove_server() {
-    local host="$1" server="$2" config="" updated cli="$1"
+    local host="$1" caller_home="$2" server="$3" config updated
     local -a args=(mcp remove "$server")
-    case "$host" in
-        claude) config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"; args+=(--scope user) ;;
-        agy) cli="${AGY_BIN:-agy}"; config="$HOME/.gemini/config/mcp_config.json" ;;
-    esac
-    if "$cli" "${args[@]}" 2>/dev/null; then
-        echo -e "  ${GREEN}[OK]${NC} Removed $server from $host"
-    elif [ -s "$config" ] && command -v jq >/dev/null &&
+    config="$(caller_registry "$host" "$caller_home")"
+    if [ "$host" = claude ]; then args+=(--scope user); fi
+    if caller_cli "$host" "$caller_home" "${args[@]}" 2>/dev/null; then
+        echo -e "  ${GREEN}[OK]${NC} Removed $server from $caller_home"
+    elif [ "$host" != codex ] && [ -s "$config" ] && command -v jq >/dev/null &&
         jq -e --arg server "$server" '.mcpServers[$server]' "$config" >/dev/null 2>&1; then
         updated=$(jq --arg server "$server" 'del(.mcpServers[$server])' "$config")
         printf '%s\n' "$updated" > "$config"
         echo -e "  ${GREEN}[OK]${NC} Removed $server from $config"
     else
-        echo -e "  ${YELLOW}[SKIP]${NC} $server not found in $host"
+        echo -e "  ${YELLOW}[SKIP]${NC} $server not removed from $caller_home"
         return 0
     fi
     REMOVED=$((REMOVED + 1))
@@ -46,40 +46,10 @@ remove_skills() {
     done
 }
 
-echo -e "${BLUE}Dual Agent Environment Uninstall${NC}"
-echo -e "${YELLOW}Removing MCP servers...${NC}"
-for index in "${!CELLS[@]}"; do
-    [ -n "${CELLS[$index]}" ] || continue
-    load_cell "$index"
-    server="$INTEGRATION_PROVIDER-delegate"
-    remove_server "$INTEGRATION_HOST" "$server"
-    case "$INTEGRATION_HOST" in
-        claude) CLAUDE_SERVERS+=("$server") ;;
-        codex) CODEX_SERVERS+=("$server") ;;
-    esac
-done
-
-# Include the former Gemini integration during migration and uninstall.
-remove_server claude gemini-delegate
-remove_server codex gemini-delegate
-CLAUDE_SERVERS+=(gemini-delegate)
-CODEX_SERVERS+=(gemini-delegate)
-
-# Include retired skills so upgrades can still be fully uninstalled.
-CLAUDE_SKILLS=("${CLAUDE_SERVERS[@]}" codex-read codex-status codex-implement codex-plan-review codex-review)
-CODEX_SKILLS=("${CODEX_SERVERS[@]}" claude-status read-task respond)
-echo -e "${YELLOW}Removing host skills...${NC}"
-remove_skills "$HOME/.gemini/antigravity-cli/skills" dual-agent-review
-remove_skills "$HOME/.claude/skills" "${CLAUDE_SKILLS[@]}"
-remove_skills "${CODEX_HOME:-$HOME/.codex}/skills" "${CODEX_SKILLS[@]}"
-for codex_dir in "$HOME"/.codex*/; do
-    remove_skills "${codex_dir}skills" "${CODEX_SKILLS[@]}"
-done
-
-# Remove legacy permissions and obsolete settings-based MCP registrations.
-CLAUDE_SETTINGS="$HOME/.claude/settings.json"
-if [ -f "$CLAUDE_SETTINGS" ] && command -v jq >/dev/null; then
-    UPDATED=$(jq --arg servers "${CLAUDE_SERVERS[*]}" '
+remove_legacy_claude_settings() {
+    local file="$1" servers="$2" updated
+    [ -f "$file" ] && command -v jq >/dev/null || return 0
+    updated=$(jq --arg servers "$servers" '
 if .permissions.allow then .permissions.allow -= [
   "Bash(cat .agent-collab:*)",
   "Bash(echo idle > .agent-collab/status)",
@@ -90,11 +60,52 @@ if .permissions.allow then .permissions.allow -= [
   "Bash(tmux send-keys:*)"
 ] else . end
 | reduce ($servers | split(" "))[] as $server (. ; del(.mcpServers[$server]))
-' "$CLAUDE_SETTINGS")
-    printf '%s\n' "$UPDATED" > "$CLAUDE_SETTINGS"
-    echo -e "  ${GREEN}[OK]${NC} Removed legacy dual-agent settings"
+' "$file")
+    printf '%s\n' "$updated" > "$file"
+    echo -e "  ${GREEN}[OK]${NC} Removed legacy dual-agent settings from $file"
     REMOVED=$((REMOVED + 1))
+}
+
+remove_home() {
+    local row="$1" host="${CALLERS[$1]}" caller_home="${CALLER_HOMES[$1]}" column index server
+    local -a servers=()
+    for column in "${!WORKERS[@]}"; do
+        index=$((row * ${#WORKERS[@]} + column))
+        [ -n "${CELLS[$index]}" ] || continue
+        server="${WORKERS[$column]}-delegate"
+        servers+=("$server")
+        remove_server "$host" "$caller_home" "$server"
+    done
+    if [ "$host" = agy ]; then remove_skills "$caller_home/skills" dual-agent-review; return; fi
+    servers+=(gemini-delegate)
+    remove_server "$host" "$caller_home" gemini-delegate
+    if [ "$host" = claude ]; then
+        remove_skills "$caller_home/skills" "${servers[@]}" codex-read codex-status codex-implement codex-plan-review codex-review
+        remove_legacy_claude_settings "$caller_home/settings.json" "${servers[*]}"
+    else
+        remove_skills "$caller_home/skills" "${servers[@]}" claude-status read-task respond
+    fi
+}
+
+init_homes || fail "Could not resolve the active caller homes."
+echo -e "${BLUE}Dual Agent Environment Uninstall${NC}"
+if [ "$#" -eq 0 ]; then
+    choose_homes "have their integrations removed" remove
+else
+    set_all_homes 0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --home) [ "$#" -ge 2 ] || fail "--home requires HOST or HOST@/path."
+                resolve_target "$2" || fail "Invalid caller home: $2"
+                HOME_SELECTED[$TARGET_ROW]=1; shift 2 ;;
+            --help|-h) echo "Usage: $0 [--home HOST[@/path]]..."; echo "With no options, choose homes interactively."; exit 0 ;;
+            *) fail "Unknown option: $1. Use --help for usage." ;;
+        esac
+    done
 fi
+for row in "${!CALLERS[@]}"; do
+    if [ "${HOME_SELECTED[$row]}" -eq 1 ]; then remove_home "$row"; fi
+done
 
 echo -e "${GREEN}Uninstall Complete!${NC}"
 echo "Removed $REMOVED items. Restart the affected hosts to unload MCP tools."
